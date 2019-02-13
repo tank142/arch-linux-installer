@@ -1,0 +1,1672 @@
+#! /bin/bash
+DIALOG=${DIALOG=dialog}
+setfont UniCyr_8x16 2>/dev/null
+if [[ `whoami` != root ]]
+then
+	echo "Требуется root доступ"
+	su root -c arch-linux-installer
+	clear
+	exit
+fi
+
+$DIALOG --backtitle "Приветствие" \
+        --msgbox "Вас приветствует установщик Arch Linux." 5 43
+case $? in
+    1)
+	clear
+	exit
+	;;
+    255)
+	clear
+	exit
+	;;
+esac
+
+if [[ $LANG != *ru* ]]
+then
+$DIALOG --backtitle "Приветствие"  --clear \
+        --yesno "Русифицировать систему?" 5 40
+
+case $? in
+    0)
+	echo LANG=ru_RU.UTF-8 >> /etc/locale.conf &
+	sed -i 's/#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+	sed -i 's/#ru_RU.UTF-8/ru_RU.UTF-8/' /etc/locale.gen
+	wait
+	locale-gen
+	loadkeys ru
+	export LANG=ru_RU.UTF-8
+	;;
+    255)
+	clear
+	exit
+	;;
+esac
+fi
+#-------------------------------------------------------
+UMOUNT_ALL ()
+{
+if [[ `mount | grep "/mnt "` ]]
+then
+$DIALOG --backtitle "Завершение"  --clear \
+        --yesno "Размонтировать разделы?" 5 40
+
+case $? in
+    0)
+	umount /mnt/boot/efi/ 2>/dev/null
+	umount /mnt/boot 2>/dev/null
+	umount /mnt/home 2>/dev/null
+	umount /mnt 2>/dev/null
+	;;
+    1)
+    clear
+    exit
+	;;
+    255)
+    clear
+    exit
+	;;
+esac
+fi
+}
+
+MOUNT ()
+{
+if [[ $mkfs == *btrfs* ]]
+then
+
+	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+	trap "rm -f $tempfile" 0 1 2 5 15
+	$DIALOG --clear --title " " --backtitle "Подготовка разделов" \
+	        --menu " Выбор типа сжатия " 10 51 4 \
+	        "compress=no"  "Без сжатия" \
+	        "compress=lzo"  "lzo" \
+	        "compress=zlib"  "zlib" 2> $tempfile
+
+	retval=$?
+	mkfs_o=`cat $tempfile`
+	case $retval in
+	  0)
+	ssd=`echo $mkfs_p | tr -d 0-9`
+	ssd=`cat /sys/block/$ssd/removable`
+	if [[ 1 == $ssd ]]
+	then
+		mkfs_o+=",discard,ssd,ssd_spread"
+	fi
+	mount /dev/$mkfs_p $mkfs_d -o $mkfs_o
+	;;
+	255)
+	UMOUNT_ALL
+	clear
+	exit
+	;;
+	esac
+else
+	if [[ $mkfs == *ext* || $mkfs == *xfs* || $mkfs == *jfs* ]]
+	then
+		ssd=`echo $mkfs_p | tr -d 0-9`
+		ssd=`cat /sys/block/$ssd/removable`
+		if [[ "1" == $ssd ]]
+		then
+			$mkfs_o="-o discard"
+		fi
+		if [[ $mkfs == *ext2* ]]
+		then
+			mount /dev/$mkfs_p $mkfs_d $mkfs_o -t ext2
+		else
+			mount /dev/$mkfs_p $mkfs_d $mkfs_o
+		fi
+	fi
+fi
+}
+
+NO_MKFS ()
+{
+mkfs=`df -T /dev/$mkfs_p | sed -n '2p' | awk '{print $2}'`
+if [[ $mkfs == devtmpfs ]]
+then
+	swapon /dev/$mkfs_p
+else
+	MOUNT
+fi
+}
+
+MKFS ()
+{
+if [[ NO_MKFS == $mkfs || ext4_has_j == $mkfs ]]
+then
+	$mkfs
+else
+	if [[ $mkfs == mk* ]]
+	then
+		$mkfs /dev/$mkfs_p
+		MOUNT
+	else
+	$mkfs
+	MOUNT
+	fi
+fi
+
+if [[ mkswap == $mkfs ]]
+then
+	mkswap /dev/$mkfs_p
+	swapon /dev/$mkfs_p
+fi
+}
+
+ext4_has_j ()
+{
+mke2fs -t ext4 -O ^has_journal /dev/$mkfs_p
+MOUNT
+}
+
+btrfs ()
+{
+mkfs.btrfs -f /dev/$mkfs_p
+MOUNT
+}
+
+btrfs_d ()
+{
+	btrfs_d_1 ()
+	{
+		tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+		trap "rm -f $tempfile" 0 1 2 5 15
+		$DIALOG --title " Форматирование раздела " --clear --backtitle "Подготовка разделов" \
+			--inputbox "Выбранные разделы: /dev/$mkfs_p $btrfs_MK \n Введите имя раздела:" 9 61 2> $tempfile
+			retval=$?
+		btrfs_D=`cat $tempfile`
+		case $? in
+		    0)
+			btrfs_MK+=" /dev/$btrfs_D"
+			btrfs_d_2
+			;;
+		    255)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		esac
+	}
+	btrfs_d_2 ()
+	{
+		$DIALOG --backtitle "Разделы BfsFS"  --clear --backtitle "Подготовка разделов"  \
+			--yesno "Выбранные разделы: /dev/$mkfs_p $btrfs_MK \n Выбрать ещё один раздел?" 7 60
+
+		case $? in
+		    0)
+			btrfs_d_1
+			;;
+		    1)
+			mkfs.btrfs -f -d single -m single /dev/$mkfs_p $btrfs_MK
+			btrfs_MK=
+			;;
+		    255)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		esac
+	}
+btrfs_d_1
+}
+
+btrfs_v ()
+{
+MOUNT
+btrfs_v_1 ()
+{
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title " Форматирование раздела " --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя раздела:" 8 61 2> $tempfile
+	retval=$?
+btrfs_V=`cat $tempfile`
+case $? in
+    0)
+	mkfs.btrfs -f /dev/$btrfs_V
+    	btrfs device add /dev/$btrfs_V $mkfs_d
+	btrfs_v_2
+	;;
+    255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+btrfs_v_balance ()
+{
+$DIALOG --backtitle "Подготовка разделов"  --clear \
+        --yesno "Выполнить балансировку данных между разделами?" 5 40
+
+case $? in
+    0)
+	btrfs filesystem balance $mkfs_d
+	;;
+    1)
+    clear
+    exit
+	;;
+    255)
+    clear
+    exit
+	;;
+esac
+}
+
+btrfs_v_2 ()
+{
+$DIALOG --backtitle "Разделы BfsFS"  --clear --backtitle "Подготовка разделов"  \
+        --yesno "Выбрать ещё один раздел" 5 40
+
+case $? in
+    0)
+	btrfs_v_1
+	;;
+    1)
+	btrfs_v_balance
+	btrfs_MK=
+	;;
+    255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+btrfs_v_1
+}
+
+MKFS_MENU ()
+{
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --clear --title "Форматирование раздела" --backtitle "Подготовка разделов" \
+        --menu "Выбор файловой системы" 21 60 50 \
+	"NO_MKFS"         "Без форматирования" \
+	"btrfs"           "BtrFS" \
+	"btrfs_d"         "BtrFS на нескольких разделах" \
+	"btrfs_v"         "Создать и подключить раздел к BtrFS" \
+        "mkfs.ext2"       "Ext2" \
+        "mkfs.ext3"       "Ext3" \
+        "mkfs.ext4"       "Ext4" \
+        "ext4_has_j"      "Ext4 без журнала" \
+        "mkfs.bfs"        "BFS" \
+        "mkfs.f2fs"       "F2FS" \
+	"mkfs.jfs"        "JFS" \
+	"mkfs.reiserfs"   "ReiserFS" \
+	"mkfs.xfs"        "XFS" \
+	"mkfs.nilfs2"     "NILFS" \
+	"mkswap"          "Раздел подкачки" 2> $tempfile
+retval=$?
+mkfs=`cat $tempfile`
+case $retval in
+  0)
+    MKFS
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+
+#-------------------------------------------------------
+CF_DISK ()
+{
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "Редактор разделов" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя носителя:" 8 61 2> $tempfile
+	retval=$?
+cf_disk=`cat $tempfile`
+case $retval in
+  0)
+    cfdisk /dev/$cf_disk
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+ROOT ()
+{
+if [[ `mount | grep "/mnt "` ]]
+then
+umount /mnt/boot/efi/
+umount /mnt/boot
+umount /mnt/home
+umount /mnt
+fi
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя корневого раздела:" 5 61 2> $tempfile
+	retval=$?
+root=`cat $tempfile`
+
+case $retval in
+  0)
+    mkfs_p=$root
+    mkfs_d="/mnt"
+    MKFS_MENU
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+BOOT ()
+{
+if [[ `mount | grep "/mnt/boot "` ]]
+then
+umount /mnt/boot/efi/
+umount /mnt/boot
+fi
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя boot раздела:" 5 61 2> $tempfile
+	retval=$?
+boot=`cat $tempfile`
+
+case $retval in
+  0)
+    mkfs_p=$boot
+    mkfs_d="/mnt/boot"
+    mkdir /mnt/boot
+    MKFS_MENU
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+HOME ()
+{
+if [[ `mount | grep "/mnt/home "` ]]
+then
+	umount /mnt/home
+fi
+
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя home раздела:" 5 61 2> $tempfile
+	retval=$?
+home=`cat $tempfile`
+
+case $retval in
+  0)
+    mkfs_p=$home
+    mkfs_d="/mnt/home"
+    mkdir /mnt/home
+    MKFS_MENU
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+EFI()
+{
+if [[ `mount | grep "/boot/efi/ "` ]]
+then
+umount /boot/efi/
+fi
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя efi раздела:" 5 61 2> $tempfile
+	retval=$?
+efi=`cat $tempfile`
+case $retval in
+  0)
+    mkfs.vfat -F 32 /dev/$efi
+    parted /dev/`echo $efi | tr -d 0-9` set `echo $efi | tr -d A-z` boot on
+    parted /dev/`echo $efi | tr -d 0-9` set `echo $efi | tr -d A-z` esp on
+    mkdir -p  /mnt/boot/efi/
+    mount /dev/$efi /mnt/boot/efi/
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+
+BIOS_GRUB()
+{
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя bios grub раздела:" 5 61 2> $tempfile
+	retval=$?
+bios_grub=`cat $tempfile`
+case $retval in
+  0)
+    parted /dev/`echo $bios_grub | tr -d 0-9` set `echo $bios_grub | tr -d A-z` bios_grub on
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    ;;
+esac
+}
+
+GDISK ()
+{
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --title "Преобразование таблицы разделов" --clear --backtitle "Подготовка разделов" \
+        --inputbox "Введите имя носителя:" 5 61 2> $tempfile
+	retval=$?
+disk=`cat $tempfile`
+case $retval in
+  0)
+    gdisk /dev/$disk
+    MENU_PARTED
+    ;;
+  1)
+    MENU_PARTED
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    ;;
+esac
+}
+#-------------------------------------------------------
+EFI_CHECK ()
+{
+if [[ -z `mount | grep "/mnt "` ]]
+then
+$DIALOG --backtitle "Подготовка разделов" \
+        --msgbox "Нет efi раздела" 5 63
+case $? in
+    0)
+	MENU_PARTED
+	;;
+    1)
+	MENU_PARTED
+	;;
+    255)
+	UMOUNT_ALL
+	clear
+	exit
+	;;
+esac
+fi
+}
+ROOT_CHECK ()
+{
+if [[ -z `mount | grep "/mnt "` ]]
+then
+$DIALOG --backtitle "Подготовка разделов" \
+        --msgbox "Нет root раздела" 5 63
+case $? in
+    0)
+	MENU_PARTED
+	;;
+    1)
+	MENU_PARTED
+	;;
+    255)
+	UMOUNT_ALL
+	clear
+	exit
+	;;
+esac
+fi
+}
+
+PARTED_L ()
+{
+#fdisk -l >> /tmp/PARTED_L
+parted -l >> /tmp/PARTED_L
+$DIALOG --no-shadow --textbox /tmp/PARTED_L 10000 10000
+rm /tmp/PARTED_L
+MENU_PARTED
+}
+
+PARTED_CHECK ()
+{
+if [[ `mount | grep "/mnt "` ]]
+then
+    ROOT_OK="\Z2\Zb OK"
+    root=`mount | grep "/mnt " | awk '{print $1}' | cut -c 6-`
+    root_fs=`blkid -s TYPE -o value /dev/$root`
+else
+    ROOT_OK="\Z1\Zb OFF"
+fi
+
+if [[ `mount | grep "/mnt/boot/efi "` ]]
+then
+    EFI_OK="\Z2\Zb OK"
+else
+    EFI_OK="\Z1\Zb OFF"
+fi
+
+if [[ `mount | grep "/mnt/home "` ]]
+then
+    HOME_OK="\Z2\Zb OK"
+    home=`mount | grep "/mnt/home " | awk '{print $1}' | cut -c 6-`
+    home_fs=`blkid -s TYPE -o value /dev/$home`
+else
+    HOME_OK="\Z7\Zb OFF"
+fi
+
+if [[ `mount | grep "/mnt/boot "` ]]
+then
+    BOOT_OK="\Z2\Zb OK"
+    boot=`mount | grep "/mnt/boot " | awk '{print $1}' | cut -c 6-`
+    boot_fs=`blkid -s TYPE -o value /dev/$boot`
+else
+    BOOT_OK="\Z7\Zb OFF"
+fi
+}
+
+MENU_PARTED ()
+{
+PARTED_CHECK
+if [[ `efivar-tester` != *not\ supported* ]]
+then
+	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+	trap "rm -f $tempfile" 0 1 2 5 15
+	$DIALOG --clear --title "Редактор разделов" --backtitle "Подготовка разделов" \
+		--colors --menu "" 14 50 20 \
+		"PARTED_L" "Просмотреть разделы" \
+		"CF_DISK" "Редактировать разделы" \
+		"GDISK"   "Преобразовать таблицу разделов" \
+		"ROOT"    "Раздел root		$root_fs $ROOT_OK" \
+		"BOOT"    "Раздел boot		$boot_fs $BOOT_OK" \
+		"EFI"     "Раздел efi		 $EFI_OK" \
+		"HOME"    "Раздел home		$home_fs $HOME_OK" \
+		""        "Продолжить установку" 2> $tempfile
+	retval=$?
+	PARTED_MK=`cat $tempfile`
+
+	case $retval in
+	  0)
+	    $PARTED_MK
+	    ROOT_CHECK
+	    EFI_CHECK
+	    ;;
+	  1)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	  255)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	esac
+else
+	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+	trap "rm -f $tempfile" 0 1 2 5 15
+	$DIALOG --clear --title "Редактор разделов" --backtitle "Подготовка разделов" \
+		--colors --menu "" 14 50 20 \
+		"PARTED_L"   "Просмотреть разделы" \
+		"CF_DISK"   "Редактировать разделы" \
+		"GDISK"     "Преобразовать таблицу разделов" \
+		"ROOT"      "Раздел root	$root_fs $ROOT_OK" \
+		"BOOT"      "Раздел boot	$boot_fs $BOOT_OK" \
+		"HOME"      "Раздел home	$home_fs $HOME_OK" \
+		"BIOS_GRUB" "Раздел bios grub" \
+		""          "Продолжить установку" 2> $tempfile
+	retval=$?
+	PARTED_MK=`cat $tempfile`
+	case $retval in
+	  0)
+	    $PARTED_MK
+	    ROOT_CHECK
+	    ;;
+	  1)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	  255)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	esac
+fi
+}
+PARTED_L
+#--------- Установка пакетов для потдержки ФС ------------
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *btrfs* || "`blkid -s TYPE -o value /dev/$boot`" == *btrfs* || "`blkid -s TYPE -o value /dev/$home`" == *btrfs* ]]
+then
+	fs_pkg+="btrfs-progs "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *ext* || "`blkid -s TYPE -o value /dev/$boot`" == *ext* || "`blkid -s TYPE -o value /dev/$home`" == *ext* ]]
+then
+	fs_pkg+="e2fsprogs "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *f2fs* || "`blkid -s TYPE -o value /dev/$boot`" == *f2fs* || "`blkid -s TYPE -o value /dev/$home`" == *f2fs* ]]
+then
+	fs_pkg+="f2fs-tools "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *jfs* || "`blkid -s TYPE -o value /dev/$boot`" == *jfs* || "`blkid -s TYPE -o value /dev/$home`" == *jfs* ]]
+then
+	fs_pkg+="jfsutils "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *reiser* || "`blkid -s TYPE -o value /dev/$boot`" == *reiser* || "`blkid -s TYPE -o value /dev/$home`" == *reiser* ]]
+then
+	fs_pkg+="reiserfsprogs "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *xfs* || "`blkid -s TYPE -o value /dev/$boot`" == *xfs* || "`blkid -s TYPE -o value /dev/$home`" == *xfs* ]]
+then
+	fs_pkg+="xfsprogs "
+fi
+
+if [[ "`blkid -s TYPE -o value /dev/$root`" == *nilfs* || "`blkid -s TYPE -o value /dev/$boot`" == *nilfs* || "`blkid -s TYPE -o value /dev/$home`" == *nilfs* ]]
+then
+	fs_pkg+="nilfs-utils "
+fi
+
+#-------------------------------------------------------
+mv /etc/pacman.conf /etc/pacman.conf.1
+cp /opt/arch-linux-installer/pacman.conf.pacnew /etc/pacman.conf
+mkdir -p /mnt/var/lib/pacman/sync
+cp /var/lib/pacman/sync/* /mnt/var/lib/pacman/sync/
+RAM_PKG ()
+{
+RAM_PKG=1
+}
+HOME_PKG ()
+{
+HOME_PKG=1
+}
+
+RAM=`cat /proc/meminfo | grep -i MemTotal | awk '{print $2}'`
+if [[ `mount | grep "/mnt/home "` ]]
+then
+	if [[ $RAM > 3800000 ]]
+	then
+		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+		trap "rm -f $tempfile" 0 1 2 5 15
+		$DIALOG --backtitle "Кеш пакетов" \
+			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
+			--menu "" 9 58 4 \
+			"RAM_PKG" "Хранить кеш пакетов в ОЗУ" \
+			"HOME_PKG" "Перенести кеш пакетов на домашний раздел" \
+			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
+		retval=$?
+		choice=`cat $tempfile`
+		case $retval in
+		  0)
+		    $choice
+		    ;;
+		  1)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		  255)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		esac
+	else
+		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+		trap "rm -f $tempfile" 0 1 2 5 15
+		$DIALOG --backtitle "Кеш пакетов" \
+			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
+			--menu "" 9 58 4 \
+			"HOME_PKG" "Перенести кеш пакетов на домашний раздел" \
+			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
+		retval=$?
+		choice=`cat $tempfile`
+		case $retval in
+		  0)
+		    $choice
+		    ;;
+		  1)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		  255)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		esac
+	fi
+else
+	if [[ $RAM > 3800000 ]]
+	then
+		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+		trap "rm -f $tempfile" 0 1 2 5 15
+		$DIALOG --backtitle "Кеш пакетов" \
+			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
+			--menu "" 8 58 4 \
+			"RAM_PKG" "Хранить кеш пакетов в ОЗУ" \
+			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
+		retval=$?
+		$choice=`cat $tempfile`
+		case $retval in
+		  0)
+		    $choice
+		    ;;
+		  1)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		  255)
+		    UMOUNT_ALL
+		    clear
+		    exit
+		    ;;
+		esac
+	fi
+fi
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --backtitle "Компоненты системы" \
+        --menu " Выбор ядра " 11 40 600 \
+	""'linux'"" " " \
+	""'linux-lts'"" " " \
+        ""'linux-grsec'"" " " \
+        ""'linux-zen'"" " " 2> $tempfile
+retval=$?
+kernel=`cat $tempfile`
+case $retval in
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+KERNEL_HEADERS ()
+{
+if [[ $kernel == linux ]]
+then
+	kernel+=" linux-headers"
+fi
+
+if [[ $kernel == linux-lts ]]
+then
+	kernel+=" linux-lts-headers"
+fi
+
+if [[ $kernel == linux-grsec ]]
+then
+	kernel+=" linux-grsec-headers"
+fi
+
+if [[ $kernel == linux-zen ]]
+then
+	kernel+=" linux-zen-headers"
+fi
+}
+
+DRI_MENU ()
+{
+FREE_DRI ()
+{
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --backtitle "Компоненты системы" \
+        --checklist " Выбор видеодрайверов " 14 61 600 \
+        ""'xf86-video-ati'"" "Свободные драйвера Radeon" on \
+	""'xf86-video-intel'"" "Свободные драйвера Intel" off \
+	""'xf86-video-nouveau'"" "Свободные драйвера Nvidia" off \
+	""'mesa-vdpau'"" "VDPAU драйвер" on \
+	""'opencl-mesa'"" "Потдержка OpenCL для Radeon" on \
+	""'driconf'"" "Графический инструмент для настройки" on \
+	""'mesa-libgl'"" "Графическая библиотека" on \
+	""'lib32-mesa-libgl'"" "Графическая библиотека x32" on 2> $tempfile
+retval=$?
+pkglistdri=`cat $tempfile`
+case $retval in
+  1)
+    DRI_MENU
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --backtitle "Компоненты системы" \
+        --menu " Выбор видеодрайвера " 13 45 600 \
+	""'FREE_DRI'"" "Свободные драйвера" \
+	""'$nvidia'"" "Nvidia" \
+        ""'$nvidia340'"" "Nvidia версии 340xx" \
+        ""'$nvidia304'"" "Nvidia версии 304xx" \
+        ""'catalyst'"" "AMD Catalyst" 2> $tempfile
+retval=$?
+pkglistdri=`cat $tempfile`
+case $retval in
+  0)
+    $pkglistdri
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+}
+
+DRI_MENU
+
+OPENRC ()
+{
+if [[ `cat /etc/pacman.conf` != *[openrc-eudev]* ]]
+then
+	echo -e "\n[openrc-eudev]\nSigLevel=PackageOptional\nServer=http://downloads.sourceforge.net/project/archopenrc/\$repo/\$arch" >> /etc/pacman.conf
+fi
+sysinit=""'$base_openrc'""
+OPENRC=1
+}
+
+SYSTEMD ()
+{
+sysinit=""'$base_systemd'""
+SYSTEMD=1
+}
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --backtitle "Компоненты системы" \
+        --menu " Выбор системы инициализации " 13 45 600 \
+	""'SYSTEMD'"" " " \
+	""'OPENRC'"" " " 2> $tempfile
+retval=$?
+choice=`cat $tempfile`
+case $retval in
+  0)
+    $choice
+    ;;
+    1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+if [[ $HOSTTYPE == "x86_64" ]]
+then
+	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+	trap "rm -f $tempfile" 0 1 2 5 15
+	$DIALOG --backtitle "Компоненты системы" \
+	        --menu " Компоненты для сборки пакетов " 10 45 4 \
+		""'base-devel'""	"Обычные" \
+	        ""'$multilib_devel'""	"С потдержкой x32" \
+	        ""' '""			"Не устанавливать" 2> $tempfile
+	retval=$?
+	devel=`cat $tempfile`
+	case $retval in
+	  1)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	  255)
+	    UMOUNT_ALL
+	    clear
+	    exit
+	    ;;
+	esac
+else
+	$DIALOG --backtitle "Компоненты системы"  --clear \
+        --yesno "Установить компоненты для сборки пакетов?" 5 50
+
+	case $? in
+	    0)
+	        devel=base-devel
+		;;
+	    255)
+		clear
+		exit
+		;;
+	esac
+fi
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
+        --checklist "Темы курсора" 40 81 600 \
+	""'oxygen'"" "Oxygen" on \
+	""'xcursor-bluecurve'"" "Bluecurve" off \
+	""'xcursor-comix'"" "Comix" off \
+	""'xcursor-flatbed'"" "Flatbed" off \
+	""'xcursor-neutral'"" "Neutral" off \
+	""'xcursor-pinux'"" "Pinux's Tux" off \
+	""'xcursor-premium'"" "Premium" off \
+	""'xcursor-simpleandsoft'"" "Simple and soft" off \
+	""'xcursor-themes'"" "X.org" off \
+	""'xcursor-vanilla-dmz'"" "Vanilla DMZ" off \
+	""'xcursor-vanilla-dmz-aa'"" "Vanilla DMZ AA" off 2> $tempfile
+retval=$?
+pkgcursortheme=`cat $tempfile`
+case $retval in
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
+        --checklist "Темы значков" 40 81 600 \
+	""'lxde-icon-theme'"" "LXDE" off \
+	""'adwaita-icon-theme'"" "Adwaita" off \
+	""'deepin-icon-theme'"" "Deepin" off \
+	""'elementary-icon-theme'"" "Elementary" off \
+	""'faenza-icon-theme'"" "Faenza" off \
+	""'faience-icon-theme'"" "Faience" off \
+	""'flattr-icon-theme'"" "Flattr" off \
+	""'gnome-icon-theme'"" "GNOME" off \
+	""'gnome-icon-theme-extras'"" "GNOME - Extras" off \
+	""'gnome-icon-theme-symbolic'"" "GNOME - Symbolic " off \
+	""'hicolor-icon-theme'"" "Hicolor" off \
+	""'human-icon-theme'"" "Human" off \
+	""'mate-icon-theme'"" "MATE" off \
+	""'mate-icon-theme-faenza'"" "MATE - Faenza" off \
+	""'tangerine-icon-theme'"" "Tango" on 2> $tempfile
+retval=$?
+pkgicontheme=`cat $tempfile`
+case $retval in
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+breeze-gtk
+
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
+        --checklist "Темы GTK" 40 81 600 \
+	""'breeze-gtk'"" "Breeze" off \
+	""'deepin-gtk-theme'"" "Deepin" on \
+	""'gnome-themes-standard'"" "GNOME" off \
+	""'mate-themes'"" "MATE" off \
+	""'numix-themes'"" "Numix" on \
+	""'openbox-themes'"" "Набор тем OpenBOX'а"  off 2> $tempfile
+retval=$?
+pkgthemeGTK=`cat $tempfile`
+case $retval in
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
+        --checklist "Темы курсоров" 40 81 600 \
+	""'ttf-dejavu'"" "Шрифты Dejavu" on \
+	""'ttf-droid'"" "Шрифты Droid"  on 2> $tempfile
+retval=$?
+pkgfonts=`cat $tempfile`
+case $retval in
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --separate-output --backtitle "Компоненты системы" \
+        --checklist " Выбор компонентов системы " 40 81 600 \
+	""'xf86-video-vesa'"" "Универсальный 2D драйвер" off \
+	""'$lib32'"" "32-х битные компоненты" on \
+	""'$networkmanager'"" "Network Manager" on \
+	""'alsa-utils'"" "Alsa" on \
+	""'xdg-user-dirs'"" "Управление домашними каталогами" on \
+	""'$gparted'"" "Gparted" on \
+	""'$file_roller'"" "Менеджер архивов" on \
+        ""'slim'"" "Slim" off \
+	""'lightdm'"" "LightDM" off \
+	""'lxdm'"" "Lxdm" on \
+        ""'$lxde'"" "Lxde" on \
+	""'obconf'"" "Менеджер настройки Openbox" on \
+	""'gdm'"" "GDM" off \
+	""'gnome-extra'"" "Gnome" off \
+	""'kdebase-workspace'"" "KDM" off \
+	""'$kde'"" "KDE" off \
+	""'xfce4'"" "Xfce" off \
+	""'$libreoffice_still'"" "LibreOffice Still" on \
+	""'$libreoffice_fresh'"" "LibreOffice Fresh" off \
+	""'thunar'"" "Thunar" off \
+	""'pcmanfm'"" "PCManFM" off \
+	""'gvfs'"" "GVFS" on \
+	""'gvfs-afc'"" "GVFS\Потдержка AFC" off \
+	""'gvfs-smb'"" "GVFS\Потдержка SMB/CIFS" off \
+	""'gvfs-gphoto2'"" "GVFS\Потдержка PTP камер/MTP медиа плееров" on \
+	""'gvfs-mtp'"" "GVFS\Потдержка MTP устройств" on \
+	""'gvfs-nfs'"" "GVFS\Потдержка NFS" off \
+	""'gvfs-google'"" "GVFS\Потдержка Google Drive" off \
+	""'audacity'"" "Audacity" on \
+	""'deadbeef'"" "DeaDBeeF" off \
+	""'$quodlibet'"" "Quod Libet" on \
+	""'audacity'"" "Audacity" on \
+	""'smplayer'"" "SMPlayer" on \
+	""'vlc'"" "VLC" off \
+	""'wine'"" "Wine" on \
+	""'pidgin'"" "Pidgin" on \
+	""'$firefox'"" "Firefox" on \
+	""'qupzilla'"" "QupZilla" off \
+	""'chromium'"" "Chromium" off \
+	""'transmission-gtk'"" "Transmission GTK" on \
+	""'transmission-qt'"" "Transmission QT" off \
+	""'conky-manager'"" "Conky Manager" off \
+	""'steam'"" "Steam" on \
+	""'playonlinux'"" "Play On Linux" on \
+	""'yaourt'"" "Yaourt" on \
+        ""'xscreensaver'"" "Хранитель экрана"  on 2> $tempfile
+retval=$?
+pkglist=`cat $tempfile`
+case $retval in
+  0)
+if [[ $HOSTTYPE == "x86_64" ]]
+then
+	if [[ $pkglist == *playonlinux* || $pkglist == *steam* || $pkglist == *wine* || $pkglist == *lib32* ]]
+	then
+		sed -i '/#\[multilib\]/,/#Include = \/etc\/pacman.d\/mirrorlist/ s/#//' /etc/pacman.conf
+	fi
+fi
+    ;;
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+if [[ $pkglist == *yaourt* ]]
+then
+if [[ `cat /etc/pacman.conf` != *archlinuxfr* ]]
+then
+echo "
+[archlinuxfr]
+SigLevel = Optional TrustAll
+Server = http://repo.archlinux.fr/\$arch
+" >> /etc/pacman.conf
+fi
+fi
+
+if [[ $pkglistdri == catalyst ]]
+then
+	if [[ `cat /etc/pacman.conf` != *catalyst* ]]
+	then
+		sed -i s:\\[core\]:\[catalyst]\\nSigLevel\ =\ Optional\ TrustAll\\n\Server\ =\ http\\:\/\/catalyst.wirephire.com\/repo\/catalyst\/\$arch\\n\\n[core\]: /etc/pacman.conf
+	fi
+
+	if [[ `cat /etc/pacman.conf` != *xorg117* ]]
+	then
+		sed -i s:\\[core\]:\[xorg117\]\\nSigLevel\ =\ Optional\ TrustAll\\n\Server\ =\ http\\:\/\/catalyst.wirephire.com\/repo\/xorg117\/\$arch\\n\\n[core\]: /etc/pacman.conf
+	fi
+
+	if [[ $pkglist == *""'$lib32'""* ]]
+	then
+		pkglistdri32=""'$lib32-catalyst'""
+	fi
+	pkglistdri=""'$catalyst'""
+	KERNEL_HEADERS
+fi
+
+if [[ $pkglistdri == *nvidia* ]]
+then
+	if [[ $pkglistdri == *nvidia ]]
+	then
+		if [[ "$kernel" == "linux" ]]
+		then
+			nvidia_module=" nvidia"
+		fi
+
+		if [[ "$kernel" == "linux-lts" ]]
+		then
+			nvidia_module=" nvidia-lts"
+		fi
+
+		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
+		then
+			nvidia_module=" nvidia-dkms"
+			KERNEL_HEADERS
+		fi
+		
+		if [[ $pkglist == *""'$lib32'""* ]]
+		then
+			pkglistdri32=""'$lib32-nvidia'""
+		fi
+	fi
+
+	if [[ $pkglistdri == *nvidia340 ]]
+	then
+		if [[ "$kernel" == "linux" ]]
+		then
+			nvidia_module=" nvidia-340xx"
+		fi
+
+		if [[ "$kernel" == "linux-lts" ]]
+		then
+			nvidia_module=" nvidia-340xx-lts"
+		fi
+
+		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
+		then
+			nvidia_module=" nvidia-340xx-dkms"
+			KERNEL_HEADERS
+		fi
+
+		if [[ $pkglist == *""'$lib32'""* ]]
+		then
+			pkglistdri32=""'$lib32-nvidia340'""
+		fi
+	fi
+
+	if [[ $pkglistdri == *nvidia304 ]]
+	then
+		if [[ "$kernel" == "linux" ]]
+		then
+			nvidia_module=" nvidia-304xx"
+		fi
+
+		if [[ "$kernel" == "linux-lts" ]]
+		then
+			nvidia_module=" nvidia-304xx-lts"
+		fi
+
+		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
+		then
+			nvidia_module=" nvidia-304xx-dkms"
+			KERNEL_HEADERS
+		fi
+
+		if [[ $pkglist == *""'$lib32'""* ]]
+		then
+			pkglistdri32=""'$lib32-nvidia304'""
+		fi
+	fi
+fi
+
+#------------
+#Костыльная херь, надо найти другое решение
+mkdir /tmp/arch-install
+echo '
+base="sudo bash pacman bzip2 coreutils diffutils e2fsprogs file filesystem findutils gawk gcc-libs gettext glibc grep gzip inetutils iproute2 iputils less licenses logrotate man-db man-pages mdadm nano pacman pciutils  perl  psmisc s-nail sed shadow sysfsutils  tar texinfo vi which"
+base_systemd="reiserfsprogs procps-ng jfsutils device-mapper systemd-sysvcompat util-linux netctl dhcpcd pcmciautils  cryptsetup usbutils"
+base_openrc="openrc-base openrc-desktop eudev eudev-systemdcompat syslog-ng-openrc cups-openrc xorg-xwrapper cups-openrc"
+base_openrc1="openrc"
+multilib_devel="multilib-devel base-devel"
+networkmanager_orc="networkmanager-consolekit networkmanager-openrc"
+nvidia="nvidia-libgl nvidia-utils opencl-nvidia opencl-headers libvdpau"
+lib32-nvidia="lib32-nvidia-libgl lib32-nvidia-utils lib32-opencl-nvidia"
+nvidia340="nvidia-340xx-libgl nvidia-340xx-utils opencl-nvidia-340xx opencl-headers libvdpau"
+lib32-nvidia340="lib32-nvidia-340xx-libgl lib32-nvidia-340xx-utils lib32-opencl-nvidia-340xx"
+nvidia304="nvidia-304xx-libgl nvidia-304xx-utils opencl-nvidia-304xx opencl-headers libvdpau"
+lib32-nvidia304="lib32-nvidia-304xx-libgl lib32-nvidia-304xx-utils lib32-opencl-nvidia-304xx"
+catalyst="catalyst-dkms catalyst-utils catalyst-libgl opencl-catalyst"
+lib32-catalyst="lib32-catalyst-utils lib32-catalyst-libgl lib32-opencl-catalyst"
+lxde="pcmanfm openbox lxterminal lxtask lxsession lxrandr lxpanel lxmenu-data lxlauncher lxinput lxde-common lxappearance-obconf lxappearance gpicview"
+kde="kde-meta-kdebase kde-meta-kdeutils"
+lib32="lib32-alsa-lib lib32-alsa-plugins lib32-libxslt lib32-libcl lib32-ncurses  lib32-openal openal lib32-mpg123 lib32-libxml2 lib32-giflib"
+networkmanager="networkmanager modemmanager rp-pppoe ppp bluez dnsmasq dhclient"
+gparted="mtools gpart nilfs-utils ntfs-3g exfat-utils f2fs-tools gparted"
+file_roller="file-roller lrzip unace"
+firefox="firefox firefox-i18n-ru"
+libreoffice_still="libreoffice-still libreoffice-still-ru"
+libreoffice_fresh="libreoffice-fresh libreoffice-fresh-ru"
+quodlibet="quodlibet python2-pyinotify python2-musicbrainz2 cddb-py kakasi "
+' >> /tmp/arch-install/pacman
+echo -n "pacstrap-ns /mnt " >> /tmp/arch-install/pacman
+echo -n $fs_pkg $kernel ""'$base'"" $sysinit $devel $pkgcursortheme $pkgicontheme $pkgthemeGTK $pkgfonts $pkglist $pkglistdri $pkglistdri32 $nvidia_module >> /tmp/arch-install/pacman
+chmod +x /tmp/arch-install/pacman
+pacman -Sy
+/tmp/arch-install/pacman
+rm -r /tmp/arch-install
+#------------
+cp /etc/pacman.conf /mnt/etc/pacman.conf
+cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
+cp /etc/sudoers /mnt/etc/sudoers
+cp /etc/hostname /mnt/etc/hostname
+#------------
+
+rootUUID=`blkid /dev/$root -o value | head -n 1`
+if [[ "`cat /etc/fstab`" == *$rootUUID* || "`cat /etc/fstab`" == *$root* ]]
+then
+	genfstab -U /mnt >> /mnt/etc/fstab
+fi
+
+if [[ $HOME_PKG == 1 ]]
+then
+	mkdir -p /mnt/home/.pkg
+	mv /mnt/var/cache/pacman/pkg/* /mnt/home/.pkg/
+	rm -r /mnt/var/cache/pacman/pkg
+	ln -s /home/.pkg /mnt/var/cache/pacman/pkg
+fi
+
+if [[ $RAM_PKG == 1 ]]
+then
+	mount tmpfs -t tmpfs /mnt/var/cache/pacman/pkg
+	echo "
+	tmpfs   /var/cache/pacman/pkg         tmpfs   nodev,nosuid          0  0" >> /mnt/etc/fstab
+fi
+
+#-----------------------------------------------------
+if [[ $pkglistdri == *xf86-video* ]]
+then
+	echo "FONT=UniCyr_8x16" >> /mnt/etc/vconsole.conf
+fi
+
+if [[ $SYSTEMD == 1 ]]
+then
+	if [[ $pkglistdri == *catalyst* ]]
+	then
+		arch-chroot /mnt aticonfig --initial
+		nano /mnt/etc/X11/xorg.conf
+	fi
+
+	if [[ $pkglistdri == *nvidia* ]]
+	then
+		arch-chroot /mnt nvidia-xconfig
+		if [[ $nvidia_module == *dkms* ]]
+		then
+			arch-chroot /mnt systemctl enable dkms.service
+			arch-chroot /mnt systemctl start dkms.service
+		fi
+	fi
+
+	if [[ $pkglist == *networkmanager* ]]
+	then
+		arch-chroot /mnt systemctl enable NetworkManager.service
+	fi
+
+	if [[ $pkglist == *slim* ]]
+	then
+		nano /mnt/etc/slim.conf
+		nano /mnt/home/$username/.xinitrc
+		chmod +x /mnt/home/$username/.xinitrc
+		rm /mnt/etc/systemd/system/display-manager.service
+		arch-chroot /mnt systemctl enable slim.service
+	fi
+
+	if [[ $pkglist == *lightdm* ]]
+	then
+		nano /mnt/etc/lightdm/lightdm.conf
+		nano /mnt/home/$username/.xinitrc
+		rm /mnt/etc/systemd/system/display-manager.service
+		arch-chroot /mnt systemctl enable lightdm.service
+	fi
+
+	if [[ $pkglist == *lxdm* ]]
+	then
+		nano /mnt/etc/lxdm/lxdm.conf
+		rm /mnt/etc/systemd/system/display-manager.service
+		arch-chroot /mnt systemctl enable lxdm.service
+	fi
+
+	if [[ $pkglist == *gdm* ]]
+	then
+		rm /mnt/etc/systemd/system/display-manager.service
+		arch-chroot /mnt systemctl enable gdm.service
+	fi
+
+	if [[ $pkglist == *kdebase-workspace* ]]
+	then
+		rm /mnt/etc/systemd/system/display-manager.service
+		arch-chroot /mnt systemctl enable kdm.service
+	fi
+fi
+
+if [[ $OPENRC == 1 ]]
+then
+	arch-chroot /mnt rc-update add syslog-ng default
+	arch-chroot /mnt rc-update add cupsd default
+	arch-chroot /mnt rc-update add alsasound default
+	arch-chroot /mnt rc-update add consolefont boot default
+	arch-chroot /mnt rc-update add hostname boot default
+	
+		if [[ $pkglistdri == *catalyst* ]]
+	then
+		arch-chroot /mnt systemctl enable NetworkManager.service
+		arch-chroot /mnt aticonfig --initial
+		nano /mnt/etc/X11/xorg.conf
+	fi
+
+	if [[ $pkglistdri == *nvidia* ]]
+	then
+		arch-chroot /mnt nvidia-xconfig
+		if [[ $nvidia_module == *dkms* ]]
+		then
+			rc-update add NetworkManager default
+		fi
+	fi
+
+	if [[ $pkglist == *networkmanager* ]]
+	then
+		rc-update add NetworkManager default
+	fi
+
+	if [[ $pkglist == *slim* ]]
+	then
+		nano /mnt/etc/slim.conf
+		nano /mnt/home/$username/.xinitrc
+		chmod +x /mnt/home/$username/.xinitrc
+		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
+		echo 'DISPLAYMANAGER="slim"' >> /mnt/etc/conf.d/xdm
+		arch-chroot /mnt rc-update add xdm default
+	fi
+
+	if [[ $pkglist == *lightdm* ]]
+	then
+		nano /mnt/etc/lightdm/lightdm.conf
+		nano /mnt/home/$username/.xinitrc
+		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
+		echo 'DISPLAYMANAGER="lightdm"' >> /mnt/etc/conf.d/xdm
+		arch-chroot /mnt rc-update add xdm default
+	fi
+
+	if [[ $pkglist == *lxdm* ]]
+	then
+		nano /mnt/etc/lxdm/lxdm.conf
+		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
+		echo 'DISPLAYMANAGER="lxdm"' >> /mnt/etc/conf.d/xdm
+		arch-chroot /mnt rc-update add xdm default
+	fi
+
+	if [[ $pkglist == *gdm* ]]
+	then
+		rm /mnt/etc/systemd/system/display-manager.service
+		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
+		echo 'DISPLAYMANAGER="gdm"' >> /mnt/etc/conf.d/xdm
+		arch-chroot /mnt rc-update add xdm default
+	fi
+
+	if [[ $pkglist == *kdebase-workspace* ]]
+	then
+		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
+		echo 'DISPLAYMANAGER="kdm"' >> /mnt/etc/conf.d/xdm
+		arch-chroot /mnt rc-update add xdm default
+	fi
+fi
+
+arch-chroot /mnt systemctl disable getty\@tty1.service
+cp /etc/locale.gen /mnt/etc/locale.gen
+cp /etc/locale.conf /mnt/etc/locale.conf
+arch-chroot /mnt locale-gen
+notify-send "Arch Linux Installer" "Установка пакетов завершена" -i emblem-package
+
+tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+
+$DIALOG --title " Создание пользователя " --clear --backtitle "Завершение" \
+        --inputbox "Введите имя пользователя:" 8 61 2> $tempfile
+	retval=$?
+username=`cat $tempfile`
+case $retval in
+  0)
+    arch-chroot /mnt useradd -m -G users,wheel,power,audio,video,storage -s /bin/bash $username
+    echo "Пароль пользователя root"
+    arch-chroot /mnt passwd root
+    echo "Пароль пользователя $username"
+    arch-chroot /mnt passwd $username
+    ;;
+  1)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+GRUB ()
+{
+$DIALOG --backtitle "Завершение"  --clear \
+        --yesno "Искать другие ОС?" 5 40
+
+case $? in
+    0)
+        osprober=os-prober
+	;;
+    255)
+	clear
+	exit
+	;;
+esac
+
+if [[ `efivar-tester` != *not\ supported* ]]
+then
+	arch-chroot /mnt pacman -Sy
+	pacstrap-ns /mnt grub efibootmgr $osprober
+	arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+	arch-chroot /mnt grub-install --efi-directory=/boot/efi/ --bootloader-id="Arch Linux"
+else
+	arch-chroot /mnt pacman -Sy
+	pacstrap-ns /mnt grub $osprober
+	arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
+	arch-chroot /mnt grub-install /dev/`echo $root | tr -d 0-9`
+fi
+}
+
+SYSLINUX ()
+{
+SYSLINUX_CFG ()
+{
+	UUID=`blkid -o value -s UUID /dev/$root`
+	sed -i s:\root=/dev/sda3:root=UUID=$UUID: /mnt/boot/syslinux/syslinux.cfg
+	sed -i s:\vmlinuz-linux:vmlinuz-$kernel: /mnt/boot/syslinux/syslinux.cfg
+	sed -i s:\initramfs-linux:initramfs-$kernel: /mnt/boot/syslinux/syslinux.cfg
+}
+
+if [[ `efivar-tester` != *not\ supported* ]]
+modprobe efivars
+then
+	arch-chroot /mnt pacman -Sy
+	pacstrap-ns /mnt syslinux gptfdisk efibootmgr
+	SYSLINUX_CFG
+	mkdir -p /mnt/boot/efi/EFI/syslinux
+	cp /mnt/boot/syslinux/syslinux.cfg /mnt/boot/efi/EFI/syslinux/
+	if [[ $HOSTTYPE == "x86_64" ]]
+		then
+		cp -r /mnt/usr/lib/syslinux/efi64/* /mnt/boot/efi/EFI/syslinux
+		cp -r /mnt/usr/lib/syslinux/efi64/*.c32 /mnt/boot/syslinux/
+		extlinux -i /mnt/boot/syslinux/
+	else
+		cp -r /mnt/usr/lib/syslinux/efi32/* /mnt/boot/efi/EFI/syslinux
+		cp -r /mnt/usr/lib/syslinux/efi32/*.c32 /mnt/boot/syslinux/
+		extlinux -i /mnt/boot/syslinux/
+	fi
+	arch-chroot /mnt efibootmgr -c -g -d /dev/`echo $efi | tr -d 0-9` -p `echo $efi | tr -d A-z` -w -l /boot/efi/EFI/syslinux/syslinux.efi -L "Arch Linux"
+else
+	if [[ `blkid -s PTTYPE -o value /dev/$root` == *gpt* ]]
+	then
+		gptfdisk=gptfdisk
+	fi
+	pacman -Sy
+	pacstrap-ns /mnt syslinux $gptfdisk
+	SYSLINUX_CFG
+	arch-chroot /mnt syslinux-install_update -i -a -m
+fi
+}
+
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+trap "rm -f $tempfile" 0 1 2 5 15
+$DIALOG --clear --title " Установка начального загрузчика " --backtitle "Завершение" \
+        --menu "Выбор начального загрузчика" 9 38 4 \
+        "GRUB"  "Grub" \
+        "SYSLINUX"  "SysLinux" 2> $tempfile
+retval=$?
+choice=`cat $tempfile`
+case $retval in
+  0)
+    $choice
+    ;;
+  255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+#------------
+#Распаковка архива с пользовательскими файлами
+#tar -cf cfg.tar ./*
+tar -xvvf /opt/arch-linux-installer/cfg.tar -C /mnt/ 2>/dev/null
+#Установка пользовательских пакетов
+mkdir -p /mnt/opt/arch-linux-installer/pkg 2>/dev/null
+cp /opt/arch-linux-installer/pkg/* /mnt/opt/arch-linux-installer/pkg 2>/dev/null
+arch-chroot /mnt pacman -U /opt/arch-linux-installer/* 2>/dev/null
+
+cp /etc/pacman.conf.1 /etc/pacman.conf
+
+CP_PKG ()
+{
+PKG=(/var/cache/pacman/pkg/*)
+$DIALOG --title " Копирование пакетов " --gauge "$f " 5 61 < <(
+   n=${#PKG[*]};
+   i=0
+   for f in "${PKG[@]}"
+   do
+      PCT=$(( 100*(++i)/n ))
+cat <<EOF
+XXX
+$PCT
+XXX
+EOF
+  /bin/cp $f /mnt/var/cache/pacman/pkg/ &>/dev/null
+   done
+)
+}
+
+DIALOG=${DIALOG=dialog}
+tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
+$DIALOG  --clear   \
+        --yesno "Скопировать кеш пакетов в установленную систему?" 5 60
+case $? in
+    0)
+	CP_PKG
+    ;;
+    255)
+    UMOUNT_ALL
+    clear
+    exit
+    ;;
+esac
+
+UMOUNT_ALL
+
+$DIALOG --backtitle "Завершение"  --clear \
+        --yesno "Перезагрузить систему?" 5 40
+
+case $? in
+    0)
+	reboot
+	;;
+    1)
+	clear
+	exit
+	;;
+    255)
+	clear
+	exit
+	;;
+esac
