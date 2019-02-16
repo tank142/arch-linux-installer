@@ -1285,7 +1285,6 @@ then
 fi
 
 #------------
-#Костыльная херь, надо найти другое решение
 mkdir /tmp/arch-install
 echo '
 base="sudo bash pacman bzip2 coreutils diffutils e2fsprogs file filesystem findutils gawk gcc-libs gettext glibc grep gzip inetutils iproute2 iputils less licenses logrotate man-db man-pages mdadm nano pacman pciutils  perl  psmisc s-nail sed shadow sysfsutils  tar texinfo vi which"
