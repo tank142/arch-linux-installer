@@ -1,1671 +1,1213 @@
 #! /bin/bash
-DIALOG=${DIALOG=dialog}
 setfont UniCyr_8x16 2>/dev/null
-if [[ `whoami` != root ]]
-then
-	echo "Требуется root доступ"
-	su root -c arch-linux-installer
-	clear
-	exit
-fi
-
-$DIALOG --backtitle "Приветствие" \
-        --msgbox "Вас приветствует установщик Arch Linux." 5 43
-case $? in
-    1)
-	clear
-	exit
-	;;
-    255)
-	clear
-	exit
-	;;
-esac
-
-if [[ $LANG != *ru* ]]
-then
-$DIALOG --backtitle "Приветствие"  --clear \
-        --yesno "Русифицировать систему?" 5 40
-
-case $? in
-    0)
-	echo LANG=ru_RU.UTF-8 >> /etc/locale.conf &
-	sed -i 's/#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
-	sed -i 's/#ru_RU.UTF-8/ru_RU.UTF-8/' /etc/locale.gen
-	wait
-	locale-gen
-	loadkeys ru
-	export LANG=ru_RU.UTF-8
-	;;
-    255)
-	clear
-	exit
-	;;
-esac
-fi
-#-------------------------------------------------------
-UMOUNT_ALL ()
+EXIT()
 {
-if [[ `mount | grep "/mnt "` ]]
-then
-$DIALOG --backtitle "Завершение"  --clear \
-        --yesno "Размонтировать разделы?" 5 40
-
-case $? in
-    0)
-	umount /mnt/boot/efi/ 2>/dev/null
-	umount /mnt/boot 2>/dev/null
-	umount /mnt/home 2>/dev/null
-	umount /mnt 2>/dev/null
-	;;
-    1)
-    clear
-    exit
-	;;
-    255)
-    clear
-    exit
-	;;
-esac
-fi
-}
-
-MOUNT ()
-{
-if [[ $mkfs == *btrfs* ]]
-then
-
-	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-	trap "rm -f $tempfile" 0 1 2 5 15
-	$DIALOG --clear --title " " --backtitle "Подготовка разделов" \
-	        --menu " Выбор типа сжатия " 10 51 4 \
-	        "compress=no"  "Без сжатия" \
-	        "compress=lzo"  "lzo" \
-	        "compress=zlib"  "zlib" 2> $tempfile
-
-	retval=$?
-	mkfs_o=`cat $tempfile`
-	case $retval in
-	  0)
-	ssd=`echo $mkfs_p | tr -d 0-9`
-	ssd=`cat /sys/block/$ssd/removable`
-	if [[ 1 == $ssd ]]
+	if [[ $1 != 0 ]]
 	then
-		mkfs_o+=",discard,ssd,ssd_spread"
+		echo "ERROR $1"
+		exit $1
 	fi
-	mount /dev/$mkfs_p $mkfs_d -o $mkfs_o
-	;;
-	255)
-	UMOUNT_ALL
-	clear
-	exit
-	;;
-	esac
-else
-	if [[ $mkfs == *ext* || $mkfs == *xfs* || $mkfs == *jfs* ]]
-	then
-		ssd=`echo $mkfs_p | tr -d 0-9`
-		ssd=`cat /sys/block/$ssd/removable`
-		if [[ "1" == $ssd ]]
-		then
-			$mkfs_o="-o discard"
-		fi
-		if [[ $mkfs == *ext2* ]]
-		then
-			mount /dev/$mkfs_p $mkfs_d $mkfs_o -t ext2
-		else
-			mount /dev/$mkfs_p $mkfs_d $mkfs_o
-		fi
-	fi
-fi
 }
-
-NO_MKFS ()
+EXITmenu()
 {
-mkfs=`df -T /dev/$mkfs_p | sed -n '2p' | awk '{print $2}'`
-if [[ $mkfs == devtmpfs ]]
-then
-	swapon /dev/$mkfs_p
-else
-	MOUNT
-fi
-}
-
-MKFS ()
-{
-if [[ NO_MKFS == $mkfs || ext4_has_j == $mkfs ]]
-then
-	$mkfs
-else
-	if [[ $mkfs == mk* ]]
-	then
-		$mkfs /dev/$mkfs_p
-		MOUNT
-	else
-	$mkfs
-	MOUNT
-	fi
-fi
-
-if [[ mkswap == $mkfs ]]
-then
-	mkswap /dev/$mkfs_p
-	swapon /dev/$mkfs_p
-fi
-}
-
-ext4_has_j ()
-{
-mke2fs -t ext4 -O ^has_journal /dev/$mkfs_p
-MOUNT
-}
-
-btrfs ()
-{
-mkfs.btrfs -f /dev/$mkfs_p
-MOUNT
-}
-
-btrfs_d ()
-{
-	btrfs_d_1 ()
-	{
-		tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-		trap "rm -f $tempfile" 0 1 2 5 15
-		$DIALOG --title " Форматирование раздела " --clear --backtitle "Подготовка разделов" \
-			--inputbox "Выбранные разделы: /dev/$mkfs_p $btrfs_MK \n Введите имя раздела:" 9 61 2> $tempfile
-			retval=$?
-		btrfs_D=`cat $tempfile`
-		case $? in
-		    0)
-			btrfs_MK+=" /dev/$btrfs_D"
-			btrfs_d_2
-			;;
-		    255)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		esac
-	}
-	btrfs_d_2 ()
-	{
-		$DIALOG --backtitle "Разделы BfsFS"  --clear --backtitle "Подготовка разделов"  \
-			--yesno "Выбранные разделы: /dev/$mkfs_p $btrfs_MK \n Выбрать ещё один раздел?" 7 60
-
-		case $? in
-		    0)
-			btrfs_d_1
-			;;
-		    1)
-			mkfs.btrfs -f -d single -m single /dev/$mkfs_p $btrfs_MK
-			btrfs_MK=
-			;;
-		    255)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		esac
-	}
-btrfs_d_1
-}
-
-btrfs_v ()
-{
-MOUNT
-btrfs_v_1 ()
-{
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title " Форматирование раздела " --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя раздела:" 8 61 2> $tempfile
-	retval=$?
-btrfs_V=`cat $tempfile`
-case $? in
-    0)
-	mkfs.btrfs -f /dev/$btrfs_V
-    	btrfs device add /dev/$btrfs_V $mkfs_d
-	btrfs_v_2
-	;;
-    255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-btrfs_v_balance ()
-{
-$DIALOG --backtitle "Подготовка разделов"  --clear \
-        --yesno "Выполнить балансировку данных между разделами?" 5 40
-
-case $? in
-    0)
-	btrfs filesystem balance $mkfs_d
-	;;
-    1)
-    clear
-    exit
-	;;
-    255)
-    clear
-    exit
-	;;
-esac
-}
-
-btrfs_v_2 ()
-{
-$DIALOG --backtitle "Разделы BfsFS"  --clear --backtitle "Подготовка разделов"  \
-        --yesno "Выбрать ещё один раздел" 5 40
-
-case $? in
-    0)
-	btrfs_v_1
-	;;
-    1)
-	btrfs_v_balance
-	btrfs_MK=
-	;;
-    255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-btrfs_v_1
-}
-
-MKFS_MENU ()
-{
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --clear --title "Форматирование раздела" --backtitle "Подготовка разделов" \
-        --menu "Выбор файловой системы" 21 60 50 \
-	"NO_MKFS"         "Без форматирования" \
-	"btrfs"           "BtrFS" \
-	"btrfs_d"         "BtrFS на нескольких разделах" \
-	"btrfs_v"         "Создать и подключить раздел к BtrFS" \
-        "mkfs.ext2"       "Ext2" \
-        "mkfs.ext3"       "Ext3" \
-        "mkfs.ext4"       "Ext4" \
-        "ext4_has_j"      "Ext4 без журнала" \
-        "mkfs.bfs"        "BFS" \
-        "mkfs.f2fs"       "F2FS" \
-	"mkfs.jfs"        "JFS" \
-	"mkfs.reiserfs"   "ReiserFS" \
-	"mkfs.xfs"        "XFS" \
-	"mkfs.nilfs2"     "NILFS" \
-	"mkswap"          "Раздел подкачки" 2> $tempfile
-retval=$?
-mkfs=`cat $tempfile`
-case $retval in
-  0)
-    MKFS
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-
-#-------------------------------------------------------
-CF_DISK ()
-{
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "Редактор разделов" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя носителя:" 8 61 2> $tempfile
-	retval=$?
-cf_disk=`cat $tempfile`
-case $retval in
-  0)
-    cfdisk /dev/$cf_disk
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-ROOT ()
-{
-if [[ `mount | grep "/mnt "` ]]
-then
-umount /mnt/boot/efi/
-umount /mnt/boot
-umount /mnt/home
-umount /mnt
-fi
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя корневого раздела:" 5 61 2> $tempfile
-	retval=$?
-root=`cat $tempfile`
-
-case $retval in
-  0)
-    mkfs_p=$root
-    mkfs_d="/mnt"
-    MKFS_MENU
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-BOOT ()
-{
-if [[ `mount | grep "/mnt/boot "` ]]
-then
-umount /mnt/boot/efi/
-umount /mnt/boot
-fi
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя boot раздела:" 5 61 2> $tempfile
-	retval=$?
-boot=`cat $tempfile`
-
-case $retval in
-  0)
-    mkfs_p=$boot
-    mkfs_d="/mnt/boot"
-    mkdir /mnt/boot
-    MKFS_MENU
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-HOME ()
-{
-if [[ `mount | grep "/mnt/home "` ]]
-then
-	umount /mnt/home
-fi
-
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя home раздела:" 5 61 2> $tempfile
-	retval=$?
-home=`cat $tempfile`
-
-case $retval in
-  0)
-    mkfs_p=$home
-    mkfs_d="/mnt/home"
-    mkdir /mnt/home
-    MKFS_MENU
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-EFI()
-{
-if [[ `mount | grep "/boot/efi/ "` ]]
-then
-umount /boot/efi/
-fi
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя efi раздела:" 5 61 2> $tempfile
-	retval=$?
-efi=`cat $tempfile`
-case $retval in
-  0)
-    mkfs.vfat -F 32 /dev/$efi
-    parted /dev/`echo $efi | tr -d 0-9` set `echo $efi | tr -d A-z` boot on
-    parted /dev/`echo $efi | tr -d 0-9` set `echo $efi | tr -d A-z` esp on
-    mkdir -p  /mnt/boot/efi/
-    mount /dev/$efi /mnt/boot/efi/
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-
-BIOS_GRUB()
-{
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя bios grub раздела:" 5 61 2> $tempfile
-	retval=$?
-bios_grub=`cat $tempfile`
-case $retval in
-  0)
-    parted /dev/`echo $bios_grub | tr -d 0-9` set `echo $bios_grub | tr -d A-z` bios_grub on
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    ;;
-esac
-}
-
-GDISK ()
-{
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --title "Преобразование таблицы разделов" --clear --backtitle "Подготовка разделов" \
-        --inputbox "Введите имя носителя:" 5 61 2> $tempfile
-	retval=$?
-disk=`cat $tempfile`
-case $retval in
-  0)
-    gdisk /dev/$disk
-    MENU_PARTED
-    ;;
-  1)
-    MENU_PARTED
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    ;;
-esac
-}
-#-------------------------------------------------------
-EFI_CHECK ()
-{
-if [[ -z `mount | grep "/mnt "` ]]
-then
-$DIALOG --backtitle "Подготовка разделов" \
-        --msgbox "Нет efi раздела" 5 63
-case $? in
-    0)
-	MENU_PARTED
-	;;
-    1)
-	MENU_PARTED
-	;;
-    255)
-	UMOUNT_ALL
-	clear
-	exit
-	;;
-esac
-fi
-}
-ROOT_CHECK ()
-{
-if [[ -z `mount | grep "/mnt "` ]]
-then
-$DIALOG --backtitle "Подготовка разделов" \
-        --msgbox "Нет root раздела" 5 63
-case $? in
-    0)
-	MENU_PARTED
-	;;
-    1)
-	MENU_PARTED
-	;;
-    255)
-	UMOUNT_ALL
-	clear
-	exit
-	;;
-esac
-fi
-}
-
-PARTED_L ()
-{
-#fdisk -l >> /tmp/PARTED_L
-parted -l >> /tmp/PARTED_L
-$DIALOG --no-shadow --textbox /tmp/PARTED_L 10000 10000
-rm /tmp/PARTED_L
-MENU_PARTED
-}
-
-PARTED_CHECK ()
-{
-if [[ `mount | grep "/mnt "` ]]
-then
-    ROOT_OK="\Z2\Zb OK"
-    root=`mount | grep "/mnt " | awk '{print $1}' | cut -c 6-`
-    root_fs=`blkid -s TYPE -o value /dev/$root`
-else
-    ROOT_OK="\Z1\Zb OFF"
-fi
-
-if [[ `mount | grep "/mnt/boot/efi "` ]]
-then
-    EFI_OK="\Z2\Zb OK"
-else
-    EFI_OK="\Z1\Zb OFF"
-fi
-
-if [[ `mount | grep "/mnt/home "` ]]
-then
-    HOME_OK="\Z2\Zb OK"
-    home=`mount | grep "/mnt/home " | awk '{print $1}' | cut -c 6-`
-    home_fs=`blkid -s TYPE -o value /dev/$home`
-else
-    HOME_OK="\Z7\Zb OFF"
-fi
-
-if [[ `mount | grep "/mnt/boot "` ]]
-then
-    BOOT_OK="\Z2\Zb OK"
-    boot=`mount | grep "/mnt/boot " | awk '{print $1}' | cut -c 6-`
-    boot_fs=`blkid -s TYPE -o value /dev/$boot`
-else
-    BOOT_OK="\Z7\Zb OFF"
-fi
-}
-
-MENU_PARTED ()
-{
-PARTED_CHECK
-if [[ `efivar-tester` != *not\ supported* ]]
-then
-	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-	trap "rm -f $tempfile" 0 1 2 5 15
-	$DIALOG --clear --title "Редактор разделов" --backtitle "Подготовка разделов" \
-		--colors --menu "" 14 50 20 \
-		"PARTED_L" "Просмотреть разделы" \
-		"CF_DISK" "Редактировать разделы" \
-		"GDISK"   "Преобразовать таблицу разделов" \
-		"ROOT"    "Раздел root		$root_fs $ROOT_OK" \
-		"BOOT"    "Раздел boot		$boot_fs $BOOT_OK" \
-		"EFI"     "Раздел efi		 $EFI_OK" \
-		"HOME"    "Раздел home		$home_fs $HOME_OK" \
-		""        "Продолжить установку" 2> $tempfile
-	retval=$?
-	PARTED_MK=`cat $tempfile`
-
-	case $retval in
-	  0)
-	    $PARTED_MK
-	    ROOT_CHECK
-	    EFI_CHECK
-	    ;;
-	  1)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	  255)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	esac
-else
-	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-	trap "rm -f $tempfile" 0 1 2 5 15
-	$DIALOG --clear --title "Редактор разделов" --backtitle "Подготовка разделов" \
-		--colors --menu "" 14 50 20 \
-		"PARTED_L"   "Просмотреть разделы" \
-		"CF_DISK"   "Редактировать разделы" \
-		"GDISK"     "Преобразовать таблицу разделов" \
-		"ROOT"      "Раздел root	$root_fs $ROOT_OK" \
-		"BOOT"      "Раздел boot	$boot_fs $BOOT_OK" \
-		"HOME"      "Раздел home	$home_fs $HOME_OK" \
-		"BIOS_GRUB" "Раздел bios grub" \
-		""          "Продолжить установку" 2> $tempfile
-	retval=$?
-	PARTED_MK=`cat $tempfile`
-	case $retval in
-	  0)
-	    $PARTED_MK
-	    ROOT_CHECK
-	    ;;
-	  1)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	  255)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	esac
-fi
-}
-PARTED_L
-#--------- Установка пакетов для потдержки ФС ------------
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *btrfs* || "`blkid -s TYPE -o value /dev/$boot`" == *btrfs* || "`blkid -s TYPE -o value /dev/$home`" == *btrfs* ]]
-then
-	fs_pkg+="btrfs-progs "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *ext* || "`blkid -s TYPE -o value /dev/$boot`" == *ext* || "`blkid -s TYPE -o value /dev/$home`" == *ext* ]]
-then
-	fs_pkg+="e2fsprogs "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *f2fs* || "`blkid -s TYPE -o value /dev/$boot`" == *f2fs* || "`blkid -s TYPE -o value /dev/$home`" == *f2fs* ]]
-then
-	fs_pkg+="f2fs-tools "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *jfs* || "`blkid -s TYPE -o value /dev/$boot`" == *jfs* || "`blkid -s TYPE -o value /dev/$home`" == *jfs* ]]
-then
-	fs_pkg+="jfsutils "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *reiser* || "`blkid -s TYPE -o value /dev/$boot`" == *reiser* || "`blkid -s TYPE -o value /dev/$home`" == *reiser* ]]
-then
-	fs_pkg+="reiserfsprogs "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *xfs* || "`blkid -s TYPE -o value /dev/$boot`" == *xfs* || "`blkid -s TYPE -o value /dev/$home`" == *xfs* ]]
-then
-	fs_pkg+="xfsprogs "
-fi
-
-if [[ "`blkid -s TYPE -o value /dev/$root`" == *nilfs* || "`blkid -s TYPE -o value /dev/$boot`" == *nilfs* || "`blkid -s TYPE -o value /dev/$home`" == *nilfs* ]]
-then
-	fs_pkg+="nilfs-utils "
-fi
-
-#-------------------------------------------------------
-mv /etc/pacman.conf /etc/pacman.conf.1
-cp /opt/arch-linux-installer/pacman.conf.pacnew /etc/pacman.conf
-mkdir -p /mnt/var/lib/pacman/sync
-cp /var/lib/pacman/sync/* /mnt/var/lib/pacman/sync/
-RAM_PKG ()
-{
-RAM_PKG=1
-}
-HOME_PKG ()
-{
-HOME_PKG=1
-}
-
-RAM=`cat /proc/meminfo | grep -i MemTotal | awk '{print $2}'`
-if [[ `mount | grep "/mnt/home "` ]]
-then
-	if [[ $RAM > 3800000 ]]
-	then
-		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-		trap "rm -f $tempfile" 0 1 2 5 15
-		$DIALOG --backtitle "Кеш пакетов" \
-			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
-			--menu "" 9 58 4 \
-			"RAM_PKG" "Хранить кеш пакетов в ОЗУ" \
-			"HOME_PKG" "Перенести кеш пакетов на домашний раздел" \
-			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
-		retval=$?
-		choice=`cat $tempfile`
-		case $retval in
-		  0)
-		    $choice
-		    ;;
-		  1)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		  255)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		esac
-	else
-		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-		trap "rm -f $tempfile" 0 1 2 5 15
-		$DIALOG --backtitle "Кеш пакетов" \
-			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
-			--menu "" 9 58 4 \
-			"HOME_PKG" "Перенести кеш пакетов на домашний раздел" \
-			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
-		retval=$?
-		choice=`cat $tempfile`
-		case $retval in
-		  0)
-		    $choice
-		    ;;
-		  1)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		  255)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		esac
-	fi
-else
-	if [[ $RAM > 3800000 ]]
-	then
-		tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-		trap "rm -f $tempfile" 0 1 2 5 15
-		$DIALOG --backtitle "Кеш пакетов" \
-			--title " Кеш пакетов " --clear --backtitle "Компоненты системы" \
-			--menu "" 8 58 4 \
-			"RAM_PKG" "Хранить кеш пакетов в ОЗУ" \
-			" " "Оставить кеш пакетов на корневом разделе" 2> $tempfile
-		retval=$?
-		$choice=`cat $tempfile`
-		case $retval in
-		  0)
-		    $choice
-		    ;;
-		  1)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		  255)
-		    UMOUNT_ALL
-		    clear
-		    exit
-		    ;;
-		esac
-	fi
-fi
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --backtitle "Компоненты системы" \
-        --menu " Выбор ядра " 11 40 600 \
-	""'linux'"" " " \
-	""'linux-lts'"" " " \
-        ""'linux-grsec'"" " " \
-        ""'linux-zen'"" " " 2> $tempfile
-retval=$?
-kernel=`cat $tempfile`
-case $retval in
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-KERNEL_HEADERS ()
-{
-if [[ $kernel == linux ]]
-then
-	kernel+=" linux-headers"
-fi
-
-if [[ $kernel == linux-lts ]]
-then
-	kernel+=" linux-lts-headers"
-fi
-
-if [[ $kernel == linux-grsec ]]
-then
-	kernel+=" linux-grsec-headers"
-fi
-
-if [[ $kernel == linux-zen ]]
-then
-	kernel+=" linux-zen-headers"
-fi
-}
-
-DRI_MENU ()
-{
-FREE_DRI ()
-{
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --backtitle "Компоненты системы" \
-        --checklist " Выбор видеодрайверов " 14 61 600 \
-        ""'xf86-video-ati'"" "Свободные драйвера Radeon" on \
-	""'xf86-video-intel'"" "Свободные драйвера Intel" off \
-	""'xf86-video-nouveau'"" "Свободные драйвера Nvidia" off \
-	""'mesa-vdpau'"" "VDPAU драйвер" on \
-	""'opencl-mesa'"" "Потдержка OpenCL для Radeon" on \
-	""'driconf'"" "Графический инструмент для настройки" on \
-	""'mesa-libgl'"" "Графическая библиотека" on \
-	""'lib32-mesa-libgl'"" "Графическая библиотека x32" on 2> $tempfile
-retval=$?
-pkglistdri=`cat $tempfile`
-case $retval in
-  1)
-    DRI_MENU
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --backtitle "Компоненты системы" \
-        --menu " Выбор видеодрайвера " 13 45 600 \
-	""'FREE_DRI'"" "Свободные драйвера" \
-	""'$nvidia'"" "Nvidia" \
-        ""'$nvidia340'"" "Nvidia версии 340xx" \
-        ""'$nvidia304'"" "Nvidia версии 304xx" \
-        ""'catalyst'"" "AMD Catalyst" 2> $tempfile
-retval=$?
-pkglistdri=`cat $tempfile`
-case $retval in
-  0)
-    $pkglistdri
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-}
-
-DRI_MENU
-
-OPENRC ()
-{
-if [[ `cat /etc/pacman.conf` != *[openrc-eudev]* ]]
-then
-	echo -e "\n[openrc-eudev]\nSigLevel=PackageOptional\nServer=http://downloads.sourceforge.net/project/archopenrc/\$repo/\$arch" >> /etc/pacman.conf
-fi
-sysinit=""'$base_openrc'""
-OPENRC=1
-}
-
-SYSTEMD ()
-{
-sysinit=""'$base_systemd'""
-SYSTEMD=1
-}
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --backtitle "Компоненты системы" \
-        --menu " Выбор системы инициализации " 13 45 600 \
-	""'SYSTEMD'"" " " \
-	""'OPENRC'"" " " 2> $tempfile
-retval=$?
-choice=`cat $tempfile`
-case $retval in
-  0)
-    $choice
-    ;;
-    1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-if [[ $HOSTTYPE == "x86_64" ]]
-then
-	tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-	trap "rm -f $tempfile" 0 1 2 5 15
-	$DIALOG --backtitle "Компоненты системы" \
-	        --menu " Компоненты для сборки пакетов " 10 45 4 \
-		""'base-devel'""	"Обычные" \
-	        ""'$multilib_devel'""	"С потдержкой x32" \
-	        ""' '""			"Не устанавливать" 2> $tempfile
-	retval=$?
-	devel=`cat $tempfile`
-	case $retval in
-	  1)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	  255)
-	    UMOUNT_ALL
-	    clear
-	    exit
-	    ;;
-	esac
-else
-	$DIALOG --backtitle "Компоненты системы"  --clear \
-        --yesno "Установить компоненты для сборки пакетов?" 5 50
-
 	case $? in
-	    0)
-	        devel=base-devel
+		0)
+			return 0
 		;;
-	    255)
-		clear
-		exit
+		1)
+			return 1
+		;;
+		*)
+			echo "ERROR $1"
+			exit $1
 		;;
 	esac
-fi
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
-        --checklist "Темы курсора" 40 81 600 \
-	""'oxygen'"" "Oxygen" on \
-	""'xcursor-bluecurve'"" "Bluecurve" off \
-	""'xcursor-comix'"" "Comix" off \
-	""'xcursor-flatbed'"" "Flatbed" off \
-	""'xcursor-neutral'"" "Neutral" off \
-	""'xcursor-pinux'"" "Pinux's Tux" off \
-	""'xcursor-premium'"" "Premium" off \
-	""'xcursor-simpleandsoft'"" "Simple and soft" off \
-	""'xcursor-themes'"" "X.org" off \
-	""'xcursor-vanilla-dmz'"" "Vanilla DMZ" off \
-	""'xcursor-vanilla-dmz-aa'"" "Vanilla DMZ AA" off 2> $tempfile
-retval=$?
-pkgcursortheme=`cat $tempfile`
-case $retval in
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
-        --checklist "Темы значков" 40 81 600 \
-	""'lxde-icon-theme'"" "LXDE" off \
-	""'adwaita-icon-theme'"" "Adwaita" off \
-	""'deepin-icon-theme'"" "Deepin" off \
-	""'elementary-icon-theme'"" "Elementary" off \
-	""'faenza-icon-theme'"" "Faenza" off \
-	""'faience-icon-theme'"" "Faience" off \
-	""'flattr-icon-theme'"" "Flattr" off \
-	""'gnome-icon-theme'"" "GNOME" off \
-	""'gnome-icon-theme-extras'"" "GNOME - Extras" off \
-	""'gnome-icon-theme-symbolic'"" "GNOME - Symbolic " off \
-	""'hicolor-icon-theme'"" "Hicolor" off \
-	""'human-icon-theme'"" "Human" off \
-	""'mate-icon-theme'"" "MATE" off \
-	""'mate-icon-theme-faenza'"" "MATE - Faenza" off \
-	""'tangerine-icon-theme'"" "Tango" on 2> $tempfile
-retval=$?
-pkgicontheme=`cat $tempfile`
-case $retval in
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-breeze-gtk
-
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
-        --checklist "Темы GTK" 40 81 600 \
-	""'breeze-gtk'"" "Breeze" off \
-	""'deepin-gtk-theme'"" "Deepin" on \
-	""'gnome-themes-standard'"" "GNOME" off \
-	""'mate-themes'"" "MATE" off \
-	""'numix-themes'"" "Numix" on \
-	""'openbox-themes'"" "Набор тем OpenBOX'а"  off 2> $tempfile
-retval=$?
-pkgthemeGTK=`cat $tempfile`
-case $retval in
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --title " Оформление " --backtitle "Компоненты системы" \
-        --checklist "Темы курсоров" 40 81 600 \
-	""'ttf-dejavu'"" "Шрифты Dejavu" on \
-	""'ttf-droid'"" "Шрифты Droid"  on 2> $tempfile
-retval=$?
-pkgfonts=`cat $tempfile`
-case $retval in
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --separate-output --backtitle "Компоненты системы" \
-        --checklist " Выбор компонентов системы " 40 81 600 \
-	""'xf86-video-vesa'"" "Универсальный 2D драйвер" off \
-	""'$lib32'"" "32-х битные компоненты" on \
-	""'$networkmanager'"" "Network Manager" on \
-	""'alsa-utils'"" "Alsa" on \
-	""'xdg-user-dirs'"" "Управление домашними каталогами" on \
-	""'$gparted'"" "Gparted" on \
-	""'$file_roller'"" "Менеджер архивов" on \
-        ""'slim'"" "Slim" off \
-	""'lightdm'"" "LightDM" off \
-	""'lxdm'"" "Lxdm" on \
-        ""'$lxde'"" "Lxde" on \
-	""'obconf'"" "Менеджер настройки Openbox" on \
-	""'gdm'"" "GDM" off \
-	""'gnome-extra'"" "Gnome" off \
-	""'kdebase-workspace'"" "KDM" off \
-	""'$kde'"" "KDE" off \
-	""'xfce4'"" "Xfce" off \
-	""'$libreoffice_still'"" "LibreOffice Still" on \
-	""'$libreoffice_fresh'"" "LibreOffice Fresh" off \
-	""'thunar'"" "Thunar" off \
-	""'pcmanfm'"" "PCManFM" off \
-	""'gvfs'"" "GVFS" on \
-	""'gvfs-afc'"" "GVFS\Потдержка AFC" off \
-	""'gvfs-smb'"" "GVFS\Потдержка SMB/CIFS" off \
-	""'gvfs-gphoto2'"" "GVFS\Потдержка PTP камер/MTP медиа плееров" on \
-	""'gvfs-mtp'"" "GVFS\Потдержка MTP устройств" on \
-	""'gvfs-nfs'"" "GVFS\Потдержка NFS" off \
-	""'gvfs-google'"" "GVFS\Потдержка Google Drive" off \
-	""'audacity'"" "Audacity" on \
-	""'deadbeef'"" "DeaDBeeF" off \
-	""'$quodlibet'"" "Quod Libet" on \
-	""'audacity'"" "Audacity" on \
-	""'smplayer'"" "SMPlayer" on \
-	""'vlc'"" "VLC" off \
-	""'wine'"" "Wine" on \
-	""'pidgin'"" "Pidgin" on \
-	""'$firefox'"" "Firefox" on \
-	""'qupzilla'"" "QupZilla" off \
-	""'chromium'"" "Chromium" off \
-	""'transmission-gtk'"" "Transmission GTK" on \
-	""'transmission-qt'"" "Transmission QT" off \
-	""'conky-manager'"" "Conky Manager" off \
-	""'steam'"" "Steam" on \
-	""'playonlinux'"" "Play On Linux" on \
-	""'yaourt'"" "Yaourt" on \
-        ""'xscreensaver'"" "Хранитель экрана"  on 2> $tempfile
-retval=$?
-pkglist=`cat $tempfile`
-case $retval in
-  0)
-if [[ $HOSTTYPE == "x86_64" ]]
-then
-	if [[ $pkglist == *playonlinux* || $pkglist == *steam* || $pkglist == *wine* || $pkglist == *lib32* ]]
-	then
-		sed -i '/#\[multilib\]/,/#Include = \/etc\/pacman.d\/mirrorlist/ s/#//' /etc/pacman.conf
-	fi
-fi
-    ;;
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-if [[ $pkglist == *yaourt* ]]
-then
-if [[ `cat /etc/pacman.conf` != *archlinuxfr* ]]
-then
-echo "
-[archlinuxfr]
-SigLevel = Optional TrustAll
-Server = http://repo.archlinux.fr/\$arch
-" >> /etc/pacman.conf
-fi
-fi
-
-if [[ $pkglistdri == catalyst ]]
-then
-	if [[ `cat /etc/pacman.conf` != *catalyst* ]]
-	then
-		sed -i s:\\[core\]:\[catalyst]\\nSigLevel\ =\ Optional\ TrustAll\\n\Server\ =\ http\\:\/\/catalyst.wirephire.com\/repo\/catalyst\/\$arch\\n\\n[core\]: /etc/pacman.conf
-	fi
-
-	if [[ `cat /etc/pacman.conf` != *xorg117* ]]
-	then
-		sed -i s:\\[core\]:\[xorg117\]\\nSigLevel\ =\ Optional\ TrustAll\\n\Server\ =\ http\\:\/\/catalyst.wirephire.com\/repo\/xorg117\/\$arch\\n\\n[core\]: /etc/pacman.conf
-	fi
-
-	if [[ $pkglist == *""'$lib32'""* ]]
-	then
-		pkglistdri32=""'$lib32-catalyst'""
-	fi
-	pkglistdri=""'$catalyst'""
-	KERNEL_HEADERS
-fi
-
-if [[ $pkglistdri == *nvidia* ]]
-then
-	if [[ $pkglistdri == *nvidia ]]
-	then
-		if [[ "$kernel" == "linux" ]]
-		then
-			nvidia_module=" nvidia"
-		fi
-
-		if [[ "$kernel" == "linux-lts" ]]
-		then
-			nvidia_module=" nvidia-lts"
-		fi
-
-		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
-		then
-			nvidia_module=" nvidia-dkms"
-			KERNEL_HEADERS
-		fi
-		
-		if [[ $pkglist == *""'$lib32'""* ]]
-		then
-			pkglistdri32=""'$lib32-nvidia'""
-		fi
-	fi
-
-	if [[ $pkglistdri == *nvidia340 ]]
-	then
-		if [[ "$kernel" == "linux" ]]
-		then
-			nvidia_module=" nvidia-340xx"
-		fi
-
-		if [[ "$kernel" == "linux-lts" ]]
-		then
-			nvidia_module=" nvidia-340xx-lts"
-		fi
-
-		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
-		then
-			nvidia_module=" nvidia-340xx-dkms"
-			KERNEL_HEADERS
-		fi
-
-		if [[ $pkglist == *""'$lib32'""* ]]
-		then
-			pkglistdri32=""'$lib32-nvidia340'""
-		fi
-	fi
-
-	if [[ $pkglistdri == *nvidia304 ]]
-	then
-		if [[ "$kernel" == "linux" ]]
-		then
-			nvidia_module=" nvidia-304xx"
-		fi
-
-		if [[ "$kernel" == "linux-lts" ]]
-		then
-			nvidia_module=" nvidia-304xx-lts"
-		fi
-
-		if [ "$kernel" == "linux-grsec" -o "$kernel" == "linux-zen" ]
-		then
-			nvidia_module=" nvidia-304xx-dkms"
-			KERNEL_HEADERS
-		fi
-
-		if [[ $pkglist == *""'$lib32'""* ]]
-		then
-			pkglistdri32=""'$lib32-nvidia304'""
-		fi
-	fi
-fi
-
-#------------
-mkdir /tmp/arch-install
-echo '
-base="sudo bash pacman bzip2 coreutils diffutils e2fsprogs file filesystem findutils gawk gcc-libs gettext glibc grep gzip inetutils iproute2 iputils less licenses logrotate man-db man-pages mdadm nano pacman pciutils  perl  psmisc s-nail sed shadow sysfsutils  tar texinfo vi which"
-base_systemd="reiserfsprogs procps-ng jfsutils device-mapper systemd-sysvcompat util-linux netctl dhcpcd pcmciautils  cryptsetup usbutils"
-base_openrc="openrc-base openrc-desktop eudev eudev-systemdcompat syslog-ng-openrc cups-openrc xorg-xwrapper cups-openrc"
-base_openrc1="openrc"
-multilib_devel="multilib-devel base-devel"
-networkmanager_orc="networkmanager-consolekit networkmanager-openrc"
-nvidia="nvidia-libgl nvidia-utils opencl-nvidia opencl-headers libvdpau"
-lib32-nvidia="lib32-nvidia-libgl lib32-nvidia-utils lib32-opencl-nvidia"
-nvidia340="nvidia-340xx-libgl nvidia-340xx-utils opencl-nvidia-340xx opencl-headers libvdpau"
-lib32-nvidia340="lib32-nvidia-340xx-libgl lib32-nvidia-340xx-utils lib32-opencl-nvidia-340xx"
-nvidia304="nvidia-304xx-libgl nvidia-304xx-utils opencl-nvidia-304xx opencl-headers libvdpau"
-lib32-nvidia304="lib32-nvidia-304xx-libgl lib32-nvidia-304xx-utils lib32-opencl-nvidia-304xx"
-catalyst="catalyst-dkms catalyst-utils catalyst-libgl opencl-catalyst"
-lib32-catalyst="lib32-catalyst-utils lib32-catalyst-libgl lib32-opencl-catalyst"
-lxde="pcmanfm openbox lxterminal lxtask lxsession lxrandr lxpanel lxmenu-data lxlauncher lxinput lxde-common lxappearance-obconf lxappearance gpicview"
-kde="kde-meta-kdebase kde-meta-kdeutils"
-lib32="lib32-alsa-lib lib32-alsa-plugins lib32-libxslt lib32-libcl lib32-ncurses  lib32-openal openal lib32-mpg123 lib32-libxml2 lib32-giflib"
-networkmanager="networkmanager modemmanager rp-pppoe ppp bluez dnsmasq dhclient"
-gparted="mtools gpart nilfs-utils ntfs-3g exfat-utils f2fs-tools gparted"
-file_roller="file-roller lrzip unace"
-firefox="firefox firefox-i18n-ru"
-libreoffice_still="libreoffice-still libreoffice-still-ru"
-libreoffice_fresh="libreoffice-fresh libreoffice-fresh-ru"
-quodlibet="quodlibet python2-pyinotify python2-musicbrainz2 cddb-py kakasi "
-' >> /tmp/arch-install/pacman
-echo -n "pacstrap-ns /mnt " >> /tmp/arch-install/pacman
-echo -n $fs_pkg $kernel ""'$base'"" $sysinit $devel $pkgcursortheme $pkgicontheme $pkgthemeGTK $pkgfonts $pkglist $pkglistdri $pkglistdri32 $nvidia_module >> /tmp/arch-install/pacman
-chmod +x /tmp/arch-install/pacman
-pacman -Sy
-/tmp/arch-install/pacman
-rm -r /tmp/arch-install
-#------------
-cp /etc/pacman.conf /mnt/etc/pacman.conf
-cp /etc/pacman.d/mirrorlist /mnt/etc/pacman.d/mirrorlist
-cp /etc/sudoers /mnt/etc/sudoers
-cp /etc/hostname /mnt/etc/hostname
-#------------
-
-rootUUID=`blkid /dev/$root -o value | head -n 1`
-if [[ "`cat /etc/fstab`" == *$rootUUID* || "`cat /etc/fstab`" == *$root* ]]
-then
-	genfstab -U /mnt >> /mnt/etc/fstab
-fi
-
-if [[ $HOME_PKG == 1 ]]
-then
-	mkdir -p /mnt/home/.pkg
-	mv /mnt/var/cache/pacman/pkg/* /mnt/home/.pkg/
-	rm -r /mnt/var/cache/pacman/pkg
-	ln -s /home/.pkg /mnt/var/cache/pacman/pkg
-fi
-
-if [[ $RAM_PKG == 1 ]]
-then
-	mount tmpfs -t tmpfs /mnt/var/cache/pacman/pkg
-	echo "
-	tmpfs   /var/cache/pacman/pkg         tmpfs   nodev,nosuid          0  0" >> /mnt/etc/fstab
-fi
-
-#-----------------------------------------------------
-if [[ $pkglistdri == *xf86-video* ]]
-then
-	echo "FONT=UniCyr_8x16" >> /mnt/etc/vconsole.conf
-fi
-
-if [[ $SYSTEMD == 1 ]]
-then
-	if [[ $pkglistdri == *catalyst* ]]
-	then
-		arch-chroot /mnt aticonfig --initial
-		nano /mnt/etc/X11/xorg.conf
-	fi
-
-	if [[ $pkglistdri == *nvidia* ]]
-	then
-		arch-chroot /mnt nvidia-xconfig
-		if [[ $nvidia_module == *dkms* ]]
-		then
-			arch-chroot /mnt systemctl enable dkms.service
-			arch-chroot /mnt systemctl start dkms.service
-		fi
-	fi
-
-	if [[ $pkglist == *networkmanager* ]]
-	then
-		arch-chroot /mnt systemctl enable NetworkManager.service
-	fi
-
-	if [[ $pkglist == *slim* ]]
-	then
-		nano /mnt/etc/slim.conf
-		nano /mnt/home/$username/.xinitrc
-		chmod +x /mnt/home/$username/.xinitrc
-		rm /mnt/etc/systemd/system/display-manager.service
-		arch-chroot /mnt systemctl enable slim.service
-	fi
-
-	if [[ $pkglist == *lightdm* ]]
-	then
-		nano /mnt/etc/lightdm/lightdm.conf
-		nano /mnt/home/$username/.xinitrc
-		rm /mnt/etc/systemd/system/display-manager.service
-		arch-chroot /mnt systemctl enable lightdm.service
-	fi
-
-	if [[ $pkglist == *lxdm* ]]
-	then
-		nano /mnt/etc/lxdm/lxdm.conf
-		rm /mnt/etc/systemd/system/display-manager.service
-		arch-chroot /mnt systemctl enable lxdm.service
-	fi
-
-	if [[ $pkglist == *gdm* ]]
-	then
-		rm /mnt/etc/systemd/system/display-manager.service
-		arch-chroot /mnt systemctl enable gdm.service
-	fi
-
-	if [[ $pkglist == *kdebase-workspace* ]]
-	then
-		rm /mnt/etc/systemd/system/display-manager.service
-		arch-chroot /mnt systemctl enable kdm.service
-	fi
-fi
-
-if [[ $OPENRC == 1 ]]
-then
-	arch-chroot /mnt rc-update add syslog-ng default
-	arch-chroot /mnt rc-update add cupsd default
-	arch-chroot /mnt rc-update add alsasound default
-	arch-chroot /mnt rc-update add consolefont boot default
-	arch-chroot /mnt rc-update add hostname boot default
-	
-		if [[ $pkglistdri == *catalyst* ]]
-	then
-		arch-chroot /mnt systemctl enable NetworkManager.service
-		arch-chroot /mnt aticonfig --initial
-		nano /mnt/etc/X11/xorg.conf
-	fi
-
-	if [[ $pkglistdri == *nvidia* ]]
-	then
-		arch-chroot /mnt nvidia-xconfig
-		if [[ $nvidia_module == *dkms* ]]
-		then
-			rc-update add NetworkManager default
-		fi
-	fi
-
-	if [[ $pkglist == *networkmanager* ]]
-	then
-		rc-update add NetworkManager default
-	fi
-
-	if [[ $pkglist == *slim* ]]
-	then
-		nano /mnt/etc/slim.conf
-		nano /mnt/home/$username/.xinitrc
-		chmod +x /mnt/home/$username/.xinitrc
-		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
-		echo 'DISPLAYMANAGER="slim"' >> /mnt/etc/conf.d/xdm
-		arch-chroot /mnt rc-update add xdm default
-	fi
-
-	if [[ $pkglist == *lightdm* ]]
-	then
-		nano /mnt/etc/lightdm/lightdm.conf
-		nano /mnt/home/$username/.xinitrc
-		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
-		echo 'DISPLAYMANAGER="lightdm"' >> /mnt/etc/conf.d/xdm
-		arch-chroot /mnt rc-update add xdm default
-	fi
-
-	if [[ $pkglist == *lxdm* ]]
-	then
-		nano /mnt/etc/lxdm/lxdm.conf
-		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
-		echo 'DISPLAYMANAGER="lxdm"' >> /mnt/etc/conf.d/xdm
-		arch-chroot /mnt rc-update add xdm default
-	fi
-
-	if [[ $pkglist == *gdm* ]]
-	then
-		rm /mnt/etc/systemd/system/display-manager.service
-		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
-		echo 'DISPLAYMANAGER="gdm"' >> /mnt/etc/conf.d/xdm
-		arch-chroot /mnt rc-update add xdm default
-	fi
-
-	if [[ $pkglist == *kdebase-workspace* ]]
-	then
-		sed -i /DISPLAYMANAGER/g /mnt/etc/conf.d/xdm
-		echo 'DISPLAYMANAGER="kdm"' >> /mnt/etc/conf.d/xdm
-		arch-chroot /mnt rc-update add xdm default
-	fi
-fi
-
-arch-chroot /mnt systemctl disable getty\@tty1.service
-cp /etc/locale.gen /mnt/etc/locale.gen
-cp /etc/locale.conf /mnt/etc/locale.conf
-arch-chroot /mnt locale-gen
-notify-send "Arch Linux Installer" "Установка пакетов завершена" -i emblem-package
-
-tempfile=`tempfile 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-
-$DIALOG --title " Создание пользователя " --clear --backtitle "Завершение" \
-        --inputbox "Введите имя пользователя:" 8 61 2> $tempfile
-	retval=$?
-username=`cat $tempfile`
-case $retval in
-  0)
-    arch-chroot /mnt useradd -m -G users,wheel,power,audio,video,storage -s /bin/bash $username
-    echo "Пароль пользователя root"
-    arch-chroot /mnt passwd root
-    echo "Пароль пользователя $username"
-    arch-chroot /mnt passwd $username
-    ;;
-  1)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-GRUB ()
-{
-$DIALOG --backtitle "Завершение"  --clear \
-        --yesno "Искать другие ОС?" 5 40
-
-case $? in
-    0)
-        osprober=os-prober
-	;;
-    255)
-	clear
-	exit
-	;;
-esac
-
-if [[ `efivar-tester` != *not\ supported* ]]
-then
-	arch-chroot /mnt pacman -Sy
-	pacstrap-ns /mnt grub efibootmgr $osprober
-	arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-	arch-chroot /mnt grub-install --efi-directory=/boot/efi/ --bootloader-id="Arch Linux"
-else
-	arch-chroot /mnt pacman -Sy
-	pacstrap-ns /mnt grub $osprober
-	arch-chroot /mnt grub-mkconfig -o /boot/grub/grub.cfg
-	arch-chroot /mnt grub-install /dev/`echo $root | tr -d 0-9`
-fi
 }
-
-SYSLINUX ()
+#Фиксы размеров для сраного диалога
+H()
 {
-SYSLINUX_CFG ()
-{
-	UUID=`blkid -o value -s UUID /dev/$root`
-	sed -i s:\root=/dev/sda3:root=UUID=$UUID: /mnt/boot/syslinux/syslinux.cfg
-	sed -i s:\vmlinuz-linux:vmlinuz-$kernel: /mnt/boot/syslinux/syslinux.cfg
-	sed -i s:\initramfs-linux:initramfs-$kernel: /mnt/boot/syslinux/syslinux.cfg
+	resize >> /dev/null
+	H=$(( $LINES - $1 ))
 }
-
-if [[ `efivar-tester` != *not\ supported* ]]
-modprobe efivars
-then
-	arch-chroot /mnt pacman -Sy
-	pacstrap-ns /mnt syslinux gptfdisk efibootmgr
-	SYSLINUX_CFG
-	mkdir -p /mnt/boot/efi/EFI/syslinux
-	cp /mnt/boot/syslinux/syslinux.cfg /mnt/boot/efi/EFI/syslinux/
-	if [[ $HOSTTYPE == "x86_64" ]]
-		then
-		cp -r /mnt/usr/lib/syslinux/efi64/* /mnt/boot/efi/EFI/syslinux
-		cp -r /mnt/usr/lib/syslinux/efi64/*.c32 /mnt/boot/syslinux/
-		extlinux -i /mnt/boot/syslinux/
+L(){
+	L=$(( ( $2 + 1 ) / 2 ))
+	if (( $L > 3 ));then
+		L=$(( $L - $1 ))
 	else
-		cp -r /mnt/usr/lib/syslinux/efi32/* /mnt/boot/efi/EFI/syslinux
-		cp -r /mnt/usr/lib/syslinux/efi32/*.c32 /mnt/boot/syslinux/
-		extlinux -i /mnt/boot/syslinux/
+		L=1
 	fi
-	arch-chroot /mnt efibootmgr -c -g -d /dev/`echo $efi | tr -d 0-9` -p `echo $efi | tr -d A-z` -w -l /boot/efi/EFI/syslinux/syslinux.efi -L "Arch Linux"
-else
-	if [[ `blkid -s PTTYPE -o value /dev/$root` == *gpt* ]]
-	then
-		gptfdisk=gptfdisk
-	fi
-	pacman -Sy
-	pacstrap-ns /mnt syslinux $gptfdisk
-	SYSLINUX_CFG
-	arch-chroot /mnt syslinux-install_update -i -a -m
-fi
 }
-
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-trap "rm -f $tempfile" 0 1 2 5 15
-$DIALOG --clear --title " Установка начального загрузчика " --backtitle "Завершение" \
-        --menu "Выбор начального загрузчика" 9 38 4 \
-        "GRUB"  "Grub" \
-        "SYSLINUX"  "SysLinux" 2> $tempfile
-retval=$?
-choice=`cat $tempfile`
-case $retval in
-  0)
-    $choice
-    ;;
-  255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-#------------
-#Распаковка архива с пользовательскими файлами
-#tar -cf cfg.tar ./*
-tar -xvvf /opt/arch-linux-installer/cfg.tar -C /mnt/ 2>/dev/null
-#Установка пользовательских пакетов
-mkdir -p /mnt/opt/arch-linux-installer/pkg 2>/dev/null
-cp /opt/arch-linux-installer/pkg/* /mnt/opt/arch-linux-installer/pkg 2>/dev/null
-arch-chroot /mnt pacman -U /opt/arch-linux-installer/* 2>/dev/null
-
-cp /etc/pacman.conf.1 /etc/pacman.conf
-
-CP_PKG ()
+Lc(){
+	L=$(( ( $2 + 1 ) / 3 ))
+	if (( $L > 3 ));then
+		L=$(( $L - $1 ))
+	else
+		L=1
+	fi
+}
+#---------------------------------------------------------
+LOCALE()
 {
-PKG=(/var/cache/pacman/pkg/*)
-$DIALOG --title " Копирование пакетов " --gauge "$f " 5 61 < <(
-   n=${#PKG[*]};
-   i=0
-   for f in "${PKG[@]}"
-   do
-      PCT=$(( 100*(++i)/n ))
-cat <<EOF
-XXX
-$PCT
-XXX
-EOF
-  /bin/cp $f /mnt/var/cache/pacman/pkg/ &>/dev/null
-   done
-)
+	local i=0 l=( `ls /usr/share/i18n/locales` ) H
+	for f in ${l[@]}
+	do
+		for ((X=0; X < "${#LOCALES[@]}"; X++))
+		do
+			if [[ "$f" == "${LOCALES[$X]}" ]];then
+				locales[i]="$f";((i++))
+				locales[i]="";((i++))
+				locales[i]="ON";((i++))
+			fi
+		done
+	done
+	for f in ${l[@]}
+	do
+		for ((X=0; X < "${#locales[@]}"; X++))
+		do
+			if [[ "$f" == "${LOCALES[$X]}" ]];then
+				continue
+			fi
+		done
+		locales[i]="$f";((i++))
+		locales[i]="";((i++))
+		locales[i]="";((i++))
+	done
+	H 6
+	L 2 "${#locales[@]}"
+	locales=( $($INTERFACE --backtitle "$BACKTITLE" --title "locales" --checklist "" $H 0 $L "${locales[@]}" 3>&1 1>&2 2>&3) ); EXITmenu $?
+	i=0
+	for ((X=0; X < "${#locales[@]}"; X++))
+	do
+		if [[ "$LOCALE" == "${locales[$X]}" ]];then
+			locale[i]="${locales[$X]}";((i++))
+			locale[i]="";((i++))
+			break
+		fi
+	done
+	for ((X=0; X < "${#locales[@]}"; X++))
+	do
+		if [[ "$LOCALE" != "${locales[$X]}" ]];then
+			locale[i]="${locales[$X]}";((i++))
+			locale[i]="";((i++))
+		fi
+	done
+	L 2 "${#locale[@]}"
+	locale=$($INTERFACE --backtitle "$BACKTITLE" --title " Локали " --menu "Выбор основной локали" 0 0 $L "${locale[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	rm -f /etc/locale.gen /etc/locale.conf /etc/vconsole.conf
+	for ((X=0; X < "${#locales[@]}"; X++))
+	do
+		echo "${locales[$X]}.UTF-8 UTF-8" >> /etc/locale.gen; EXIT $?
+	done
+	$INTERFACE --prgbox "locale-gen" "locale-gen" -1 -1; EXIT $?
+	echo "LANG=$locale.UTF-8" >> /etc/locale.conf
+	if [[ "$locale" == *ru* || "$locale" == *RU* ]];then
+		echo 'FONT="cyr-sun16"
+CONSOLEFONT="cyr-sun16"' >> /etc/vconsole.conf; EXIT $?
+	fi
+}
+#---------------------------------------------------------
+[ALLBLK]()
+{
+	$INTERFACE --backtitle "$BACKTITLE" --title " Редактор разделов " --msgbox "`lsblk -D -f -n -o NAME,SIZE,MODEL,FSTYPE,FSUSE%,MOUNTPOINT`" 0 0
+}
+BLK(){
+	local i=$1
+	for f in $(find /dev -maxdepth 1 -name "md*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o TYPE`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "nvme*n*" -not -name "nvme*n*p*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "mmcblk*" -not -name "mmcblk*p*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "sd*" -not -name "sd*[0-9]" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+}
+BLKn(){
+	local i=$1
+	for f in $(find /dev -maxdepth 1 -name "md*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o FSTYPE,SIZE | head -n1`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "nvme*n*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o FSTYPE,SIZE | head -n1`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "mmcblk*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o FSTYPE,SIZE | head -n1`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "sd*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o FSTYPE,SIZE | head -n1`";((i++))
+	done
+}
+PARTED()
+{
+	BLK 2
+	L 2 ${#menu[@]}
+	local M
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title " Редактор разделов " --menu "`lsblk -D -M -f -n -o NAME,SIZE,MODEL,FSTYPE,FSUSE%,MOUNTPOINT`" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3)
+	case $? in
+		255)
+			menu[0]="[ALLBLK]"
+			menu[1]="Обзор носителей"
+			M=$($INTERFACE --backtitle "$BACKTITLE" --title " Редактор разделов " --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+			if [[ "$?" == 0 ]];then
+				if [[ "$M" == '[ALLBLK]' ]];then
+					[ALLBLK]
+					PARTED
+				else
+					cfdisk /dev/"$M"
+					PARTED
+				fi
+			fi
+		;;
+		*)
+			return 1
+		;;
+		0)
+			cfdisk /dev/"$M"; EXIT $?
+			PARTED
+		;;
+	esac
+}
+#---------------------------------------------------------
+SET_MOUNT_POINT(){
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --inputbox "$fstab_editor_mount_point" 8 100 "${MOUNT_POINT[$X]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		MOUNT_POINT[$X]="$M"
+	fi
+}
+SET_PARTITION(){
+	BLKn 2
+	L 2 ${#menu[@]}
+	menu[0]="$fstab_editor_overview"
+	menu[1]=""
+	menu[2]="$fstab_editor_setdir"
+	menu[3]=""
+	menu[4]="tmpfs"
+	menu[5]=""
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		case $M in
+			"$fstab_editor_overview")
+				[ALLBLK]
+				SET_PARTITION
+			;;
+			"$fstab_editor_setdir")
+				M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --inputbox "$fstab_editor_mount_point" 8 100 "${MOUNT_POINT[$X]}" 3>&1 1>&2 2>&3); EXITmenu $?
+				if [[ "$?" == 0 ]];then
+					PARTITION[$X]="$M"
+					FILESYSTEM[$X]="bind"
+					unset FORMAT[$X]
+				fi
+			;;
+			tmpfs)
+				M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --inputbox "$fstab_editor_mount_point" 8 100 "${MOUNT_POINT[$X]}" 3>&1 1>&2 2>&3); EXITmenu $?
+				if [[ "$?" == 0 ]];then
+					MOUNT_POINT[$X]="$M"
+					#FILESYSTEM[$X]="tmpfs"
+					PARTITION[$X]="tmpfs"
+					unset FORMAT[$X]
+				fi
+				
+			;;
+			*)
+				PARTITION[$X]="$M"
+				FILESYSTEM[$X]="`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`"
+				if [[ "`lsblk /dev/"${PARTITION[$X]}" -n --discard -o DISC-GRAN | head -n1`" != *"0B"* ]];then
+					if [[ "${FILESYSTEM[$X]}" == "ext4" || "${FILESYSTEM[$X]}" == "ext2" || "${FILESYSTEM[$X]}" == "vfat" || "${FILESYSTEM[$X]}" == "btrfs" || "${FILESYSTEM[$X]}" == "jfs" || "${FILESYSTEM[$X]}" == "xfs" || "${FILESYSTEM[$X]}" == "f2fs" ]];then
+						OPTIONS[$X]="$FS_OPTIONS,discard"
+					else
+						OPTIONS[$X]="$FS_OPTIONS"
+					fi
+				else
+					OPTIONS[$X]="$FS_OPTIONS"
+				fi
+			;;
+		esac
+	fi
+}
+SET_FILESYSTEM(){
+	if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
+		local menu i
+		if ! [ -eL /usr/bin/mkfs.ext4 ]];then
+			menu[i]="ext4";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.ext3 ]];then
+			menu[i]="ext3";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.ext2 ]];then
+			menu[i]="ext2";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.vfat ];then
+			menu[i]="vfat";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.jfs ];then
+			menu[i]="jfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.reiserfs ];then
+			menu[i]="reiserfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.nilfs2 ];then
+			menu[i]="nilfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.f2fs ];then
+			menu[i]="f2fs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.hfsplus ];then
+			menu[i]="hfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.xfs ];then
+			menu[i]="xfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.btrfs ];then
+			menu[i]="btrfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.ntfs ];then
+			menu[i]="ntfs";((i++))
+			menu[i]="";((i++))
+		fi
+		if ! [ -eL /usr/bin/mkfs.exfat ];then
+			menu[i]="exfat";((i++))
+			menu[i]="";((i++))
+		fi
+		L 3 ${#menu[@]}
+		M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+		if [[ "$?" == "0" ]];then
+			if [[ `lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1` != $M ]];then
+				FORMAT[$X]="1"
+			fi
+			FILESYSTEM[$X]="$M"
+		fi
+	fi
+}
+SET_FORMAT(){
+	if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
+		if [[ "`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`" == "${FILESYSTEM[$X]}" || "`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`${FILESYSTEM[$X]}" == "ext4ext2" || "`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`${FILESYSTEM[$X]}" == "ext2ext4" || "`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`" == '' ]];then
+			if [[ ${FORMAT[$X]} == "1" ]];then
+				FORMAT[$X]="0"
+			else
+				FORMAT[$X]="1"
+			fi
+		else
+			$INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --msgbox "$fstab_editor_filesystem_format_mount" 0 0
+			FORMAT[$X]="1"
+			return 0
+		fi
+	fi
+}
+SET_OPTIONS_TIME(){
+	local menu i=0
+	menu[0]="noatime"
+	menu[1]=""
+	menu[2]="atime"
+	menu[3]=""
+	menu[4]="norelatime"
+	menu[5]=""
+	menu[6]="relatime"
+	menu[7]=""
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		time="$M"
+	fi
+}
+SET_OPTIONS_DIRATIME(){
+	local menu i=0
+	menu[0]="nodiratime"
+	menu[1]=""
+	menu[2]="diratime"
+	menu[3]=""
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		timedir="$M"
+	fi
+}
+SET_OPTIONS_BTRFS_COMPRESS(){
+	local menu i=0
+	menu[0]="zlib"
+	menu[1]=""
+	menu[2]="lzo"
+	menu[3]=""
+	menu[4]="zstd"
+	menu[5]=""
+	menu[6]="no"
+	menu[7]=""
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		btrfs_compress="$M"
+	fi
+}
+SET_OPTIONS_TRIM(){
+	if [[ "$discard" == "0" ]];then
+		discard="1";((i++))
+	else
+		discard="0";((i++))
+	fi
+}
+SET_OPTIONS(){
+	local menu i=0
+	menu[i]="$fstab_options_time";((i++))
+	menu[i]="$time";((i++))
+	menu[i]="$fstab_options_timedir";((i++))
+	menu[i]="$timedir";((i++))
+	if [[ "$OPTIONS[$X]" == 'btrfs' ]];then
+		menu[i]="$fstab_options_compress";((i++))
+		menu[i]="$btrfs_compress";((i++))
+	fi
+	menu[i]="TRIM:";((i++))
+	if [[ "$discard" == 1 ]];then
+		menu[i]="$fstab_editor_on";
+	else
+		menu[i]="$fstab_editor_off";
+	fi
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ $? == "0" ]];then
+		case $M in
+			"$fstab_options_time")
+				SET_OPTIONS_TIME
+				SET_OPTIONS
+			;;
+			"$fstab_options_timedir")
+				SET_OPTIONS_DIRATIME
+				SET_OPTIONS
+			;;
+			"$fstab_options_compress")
+				SET_OPTIONS_BTRFS_COMPRESS
+				SET_OPTIONS
+			;;
+			"TRIM:")
+				SET_OPTIONS_TRIM
+				SET_OPTIONS
+			;;
+		esac
+	fi
+	OPTIONS[$X]="defaults"
+	if [[ "$time" != '' ]];then
+		OPTIONS[$X]="${OPTIONS[$X]},$time"
+	fi
+	if [[ "$time" != '' ]];then
+		OPTIONS[$X]="${OPTIONS[$X]},$timedir"
+	fi
+	if [[ "$btrfs_compress" != '' ]];then
+		OPTIONS[$X]="${OPTIONS[$X]},compress=$btrfs_compress"
+	fi
+	if [[ "$discard" == 1 ]];then
+		OPTIONS[$X]="${OPTIONS[$X]},discard"
+	fi	
+}
+SET_DUMP(){
+	if [[ "${DUMP[$X]}" == "0" ]];then
+		DUMP[$X]=1
+	else
+		DUMP[$X]=0
+	fi
+}
+SET_PASS(){
+	local menu
+	menu[0]="0"
+	menu[1]=""
+	menu[2]="1"
+	menu[3]=""
+	menu[4]="2"
+	menu[5]=""
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ $? == "0" ]];then
+		PASS[$X]="$M"
+	fi
+}
+FSTAB_EDITOR_ADD()
+{
+	local FSTAB_menu B=0
+	if [[ "${FORMAT[$X]}" == "1" ]];then
+		fstab_editor_='fstab_editor_on'
+	else
+		fstab_editor_='fstab_editor_off'
+	fi
+	FSTAB_menu[0]="$fstab_editor_partition"
+	FSTAB_menu[1]="${PARTITION[$X]}"
+	FSTAB_menu[2]="$fstab_editor_mount_point"
+	FSTAB_menu[3]="${MOUNT_POINT[$X]}"
+	if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
+		if [[ "${PARTITION[$X]}" != "tmpfs" ]];then
+			FSTAB_menu[4]="$fstab_editor_filesystem"
+			FSTAB_menu[5]="${FILESYSTEM[$X]}"
+			FSTAB_menu[6]="$fstab_editor_filesystem_format"
+			FSTAB_menu[7]="${!fstab_editor_}"
+		fi
+		FSTAB_menu[8]="$fstab_editor_options"
+		FSTAB_menu[9]="${OPTIONS[$X]}"
+		FSTAB_menu[10]="$fstab_editor_dump"
+		FSTAB_menu[11]="${DUMP[$X]}"
+		FSTAB_menu[12]="$fstab_editor_pass"
+		FSTAB_menu[13]="${PASS[$X]}"
+	fi
+	if [[ ${FILESYSTEM[$X]} == "" ]];then
+		((B++))
+	fi
+	if [[ ${MOUNT_POINT[$X]} == "" ]];then
+		((B++))
+	fi
+	if [[ ${PARTITION[$X]} == "" ]];then
+		((B++))
+	fi
+	if [[ "$B" == "0" ]];then
+		FSTAB_menu[14]="$fstab_editor_complete"
+		FSTAB_menu[15]=""
+	fi
+	L 3 ${#FSTAB_menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --colors --menu "" 0 0 $L "${FSTAB_menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	case $? in
+		0)
+			case $M in
+				"$fstab_editor_partition")
+					SET_PARTITION
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_mount_point")
+					SET_MOUNT_POINT
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_filesystem")
+					SET_FILESYSTEM
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_filesystem_format")
+					SET_FORMAT
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_options")
+					case "${OPTIONS[$X]}" in
+						*norelatime*)
+							time="norelatime"
+						;;
+						*relatime*)
+							time="relatime"
+						;;
+						*noatime*)
+							time="noatime"
+						;;
+						*atime*)
+							time="atime"
+						;;
+						*)
+							time=""
+						;;
+					esac
+					case "${OPTIONS[$X]}" in
+						*noatime*)
+							timedir="nodiratime"
+						;;
+						*atime*)
+							timedir="diratime"
+						;;
+						*)
+							timedir=""
+						;;
+					esac
+					#BTRFS
+					if [[ ${FILESYSTEM[$X]} == "btrfs" ]];then
+						case "${OPTIONS[$X]}" in
+							*compress=zlib*)
+								compress="zlib"
+							;;
+							*compress=lzo*)
+								compress="lzo"
+							;;
+							*compress=zstd*)
+								compress="zstd"
+							;;
+							*compress=no*)
+								compress="no"
+							;;
+							*)
+								compress=""
+							;;
+						esac
+					fi
+					if [[ ${OPTIONS[$X]} == *"discard"* ]];then
+						discard='1'
+					else
+						discard='0'
+					fi
+					SET_OPTIONS
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_dump")
+					SET_DUMP
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_pass")
+					SET_PASS
+					FSTAB_EDITOR_ADD
+				;;
+				"$fstab_editor_complete")
+					X=0
+				;;
+			esac
+		;;
+		1)
+			unset PARTITION[$X] MOUNT_POINT[$X] FILESYSTEM[$X] FORMAT[$X] OPTIONS[$X] DUMP[$X] PASS[$X] X
+		;;
+	esac
+	case "${FILESYSTEM[$X]}" in
+		bind)
+			unset PASS[$X] DUMP[$X] OPTIONS[$X] FORMAT[$X]
+		;;
+		tmpfs)
+			unset PASS[$X] DUMP[$X] OPTIONS[$X] FORMAT[$X]
+		;;
+	esac
+}
+FSTAB_EDITOR(){
+	local i=2 A=0 menu I L=0
+	menu[0]="A"
+	menu[1]="$fstab_editor_add"
+	for ((I=0; L < "${#PARTITION[@]}"; I++))
+	do
+		if [[ "${PARTITION[$I]}" != "" ]];then
+			((L++))
+			menu[i]="$I";((i++))
+			menu[i]="${PARTITION[$I]} ${MOUNT_POINT[$I]} ${FILESYSTEM[$I]} ${OPTIONS[$I]} ${DUMP[$I]} ${PASS[$I]}";((i++))
+		fi
+	done
+	L 3 ${#menu[@]}
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ "$?" == 0 ]];then
+		case $M in
+			"A")
+				for ((x=0;; x++));do
+					if [[ "${PARTITION[$x]}" == "" ]];then
+						X="$x"
+						break
+					fi
+				done
+				DUMP[$X]="0"
+				if [[ $X == "0" ]];then
+					MOUNT_POINT[0]="/"
+					FORMAT[0]="1"
+					FILESYSTEM[0]="ext4"
+					PASS[0]="1"
+				else
+					PASS[$X]="2"
+				fi
+				FSTAB_EDITOR_ADD
+			;;
+			*)
+				X="$M"
+				FSTAB_EDITOR_ADD
+			;;
+		esac
+		FSTAB_EDITOR
+	fi
+}
+export PARTITION MOUNT_POINT FILESYSTEM FORMAT OPTIONS DUMP PASS
+#---------------------------------------------------------
+LSGPU(){
+	local A i=1
+	for ((I=0;; I++))
+	do
+		A=`lspci | grep VGA | sed -n "$i"p`
+		if [[ "$A" != "" ]];then
+			GPU[$I]="$A";((i++))
+		else
+			break
+		fi
+	done
+}
+PKG_GPU_AUTO(){
+	local nouveau_i i=0
+	unset XF86_VIDEO_LIST
+	GPU_DRIVERS=''
+	for f in ${nvidia390[@]}
+	do
+		if [[ "${GPU[@]}" == *"$f"* ]];then
+			nvidia390_i=1
+			break
+		fi
+	done
+	for f in ${nvidia[@]}
+	do
+		if [[ "${GPU[@]}" == *"$f"* ]];then
+			nvidia_i=1
+			break
+		fi
+	done
+	if [[ "$nvidia390_i" == 1 ]];then
+		for f in ${nvidia390_not_support[@]}
+		do
+			if [[ "${GPU[@]}" == *"$f"* ]];then
+					nvidia_i=1
+					nvidia390_i=0
+					nouveau_i=1
+				break
+			fi
+		done
+	fi
+	if [[ "$nouveau_i" == 1 ]];then
+		XF86_VIDEO_LIST[$i]='xf86-video-nouveau';((i++))
+	else
+		for f in ${nouveau[@]}
+		do
+			if [[ "${GPU[@]}" == *"$f"* ]];then
+				XF86_VIDEO_LIST[$i]='xf86-video-nouveau';((i++))
+				break
+			fi
+		done
+	fi
+	for f in ${radeon[@]}
+	do
+		if [[ "${GPU[@]}" == *"$f"* ]];then
+			XF86_VIDEO_LIST[$i]='xf86-video-ati';((i++))
+			break
+		fi
+	done
+	for f in ${amdgpu[@]}
+	do
+		if [[ "${GPU[@]}" == *"$f"* ]];then
+			XF86_VIDEO_LIST[$i]='xf86-video-amdgpu';((i++))
+			break
+		fi
+	done
+	if [[ "${GPU[@]}" == *"$intel"* ]];then
+		XF86_VIDEO_LIST[$i]='xf86-video-intel';((i++))
+	fi
+	if [[ "${GPU[@]}" == *"QXL"* ]];then
+		XF86_VIDEO_LIST[$i]='xf86-video-qxl';((i++))
+	fi
+	if [[ "${GPU[@]}" == *"SiS"* ]];then
+		XF86_VIDEO_LIST[$i]='xf86-video-sisusb';((i++))
+	fi
+	if [[ "${#XF86_VIDEO_LIST}" == '0' ]];then
+		XF86_VIDEO_LIST[$i]='xf86-video-vesa'
+	fi
+}
+PKG_HVA_AUTO(){
+	local i=0 U
+	source gpu.conf
+	if [[ "${XF86_VIDEO_LIST[@]}" == *"xf86-video-intel"* ]];then
+		for f in "${intel_media_driver[@]}"
+		do
+			if [[ "${GPU[@]}" == *"$f"* ]];then
+				HVA_LIST[$i]="intel-media-driver";((i++))
+				if [[ "${HVA_LIST[@]}" != *"libva-vdpau-driver"* ]];then
+					HVA_LIST[$i]="libva-vdpau-driver";((i++))
+				fi
+				break
+			fi
+		done
+		for f in "${libva_intel_driver[@]}"
+		do
+			if [[ "${GPU[@]}" == *"$f"* ]];then
+				HVA_LIST[$i]="libva-intel-driver";((i++))
+				if [[ "${HVA_LIST[@]}" != *"libva-vdpau-driver"* ]];then
+					HVA_LIST[$i]="libva-vdpau-driver";((i++))
+				fi
+				break
+			fi
+		done
+	fi
+	for ((Z=0; Z < "${#GPU[@]}"; Z++))
+	do
+		U=0
+		for v in "${vdpau_not_support[@]}"
+		do
+			if [[ "${GPU[$Z]}" == *"$v"* ]];then
+				U=1
+				break
+			fi
+		done
+		if [[ "$U" != "1" ]];then
+			HVA_LIST[$i]="mesa-vdpau";((i++))
+			break
+		fi
+	done
+	for ((Z=0; Z < "${#GPU[@]}"; Z++))
+	do
+		U=0
+		for v in "${vaapi_not_support[@]}"
+		do
+			if [[ "${GPU[$Z]}" == *"$v"* ]];then
+				U=1
+				break
+			fi
+		done
+		if [[ "$U" != "1" ]];then
+			HVA_LIST[$i]="libva-mesa-driver";((i++))
+			break
+		fi
+	done
+	if [[ "${HVA_LIST[@]}" != *"libva-vdpau-driver"* ]];then
+		if [[ "$nvidia390_i" == "1" || "$nvidia_i" == "1" ]];then
+			HVA_LIST[$i]="libva-vdpau-driver";((i++))
+		fi
+	fi
+	if [[ "${HVA_LIST[@]}" != *"libva-vdpau-driver"* ]];then
+		if [[ "${GPU[@]}" == *"Intel"* ]];then
+			HVA_LIST[$i]="libva-vdpau-driver";((i++))
+		fi
+	fi
+	if [[ "${HVA_LIST[@]}" != *"libvdpau-va-gl"* ]];then
+		if [[ "${GPU[@]}" == *"Intel"* ]];then
+			if [[ "${HVA_LIST[@]}" != *"intel-media-driver"* && "${HVA_LIST[@]}" != *"libva-intel-driver"* ]];then
+				HVA_LIST[$i]="libvdpau-va-gl";((i++))
+			fi
+		fi
+	fi
+}
+#---------------------------------------------------------
+ECHO_PKG(){
+	local pkg
+	pkg=${1%-*}
+	pkg=${pkg%-*}
+	pkg=${pkg##*/}
+	echo ${pkg%-*}
+}
+ECHO_VER(){
+	local ver
+	ver=${1%-*}
+	ver=${ver%-*}
+	ver=${ver##*/}
+	echo ${ver##*-}
+}
+SET_KERNEL()
+{
+	local menu i=8 A
+	A=`pacman -Sp linux-lts`
+	if [[ $? == 0 ]];then
+		menu[0]="linux-lts"
+		menu[1]="`ECHO_VER ${A##*/}`"
+	fi
+	A=`pacman -Sp linux`
+	if [[ $? == 0 ]];then
+		menu[2]="linux"
+		menu[3]="`ECHO_VER ${A##*/}`"
+	fi
+	A=`pacman -Sp linux-zen`
+	if [[ $? == 0 ]];then
+		menu[4]="linux-zen"
+		menu[5]="`ECHO_VER ${A##*/}`"
+	fi
+	A=`pacman -Sp linux-hardened`
+	if [[ $? == 0 ]];then
+		menu[6]="linux-hardened"
+		menu[7]="`ECHO_VER ${A##*/}`"
+	fi
+	if [ -d "$KERNEL_DIR" ]; then
+		KERNEL=( `find "$KERNEL_DIR" -maxdepth 1 -name "*.pkg.*" -not -name "*-headers*" -type f -printf "%f\n"` )
+		for f in ${KERNEL[@]}
+		do
+			menu[i]="`ECHO_PKG "$f"`";((i++))
+			menu[i]="`ECHO_VER "$f"`";((i++))
+		done
+	fi
+	L 3 ${#menu[@]}
+	KERNEL=$($INTERFACE --backtitle "$BACKTITLE" --title "$set_kernel" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+}
+#---------------------------------------------------------
+SET_GPU(){
+	local xf86_video_list=( `pacman -Ssq xf86-video` ) menu i=3 A
+	menu[0]="NVIDIA";
+	if [[ "$nvidia_i" == 1 ]];then
+		A="`pacman -Sp nvidia | grep nvidia`"
+		menu[1]="`ECHO_VER $A`"
+		menu[2]="on"
+	else
+		if [[ "$nvidia390_i" == 1 ]];then
+			A="`pacman -Sp nvidia-390xx | grep nvidia`"
+			menu[1]="`ECHO_VER $A`"
+			menu[2]="on"
+		else
+			A="`pacman -Sp nvidia | grep nvidia`"
+			menu[1]="`ECHO_VER $A`"
+			menu[2]="off"
+		fi
+	fi
+	A=( `pacman -Sp ${xf86_video_list[@]}` )
+	for ((I=0; I < "${#xf86_video_list[@]}"; I++))
+	do
+		menu[$i]="${xf86_video_list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		if [[ "${XF86_VIDEO_LIST[@]}" != *"${xf86_video_list[$I]}"* ]];then
+			menu[$i]="off";((i++))
+		else
+			menu[$i]="on";((i++))
+		fi
+	done
+	Lc 3 ${#menu[@]}
+	XF86_VIDEO_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	for ((I=0; I < "${#XF86_VIDEO_LIST[@]}"; I++))
+	do
+		if [[ "${XF86_VIDEO_LIST[$I]}" == NVIDIA ]];then
+			SET_GPU_NVIDIA "$I"
+		fi
+	done
+}
+SET_GPU_NVIDIA(){
+	local menu A="`pacman -Sp nvidia | grep nvidia`"
+	menu[0]="nvidia"
+	menu[1]="`ECHO_VER $A`"
+	A="`pacman -Sp nvidia-390xx | grep nvidia`"
+	menu[2]="nvidia-390xx"
+	menu[3]="`ECHO_VER $A`"
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --menu "" 0 0 1 "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
+	if [[ $? == 0 ]];then
+		case $M in
+			nvidia)
+				nvidia390_i=0
+				nvidia_i=1
+			;;
+			nvidia-390xx)
+				nvidia390_i=1
+				nvidia_i=0
+			;;
+		esac
+	else
+		nvidia390_i=0
+		nvidia_i=0
+	fi
+	unset XF86_VIDEO_LIST[$I]
+}
+#---------------------------------------------------------
+SET_FONTS(){
+	local list=( `pacman -Ssq ttf-` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${FONT_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	FONT_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+#---------------------------------------------------------
+SET_XCURSOR(){
+	local list=( `pacman -Ssq xcursors-` `pacman -Ssq xcursor-` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${XCURSOR_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	XCURSOR_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+#---------------------------------------------------------
+SET_ICON(){
+	local list=( `pacman -Ssq icon-theme` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${ICON_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	ICON_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+#---------------------------------------------------------
+SET_THEME(){
+	local menu i=0 A
+	for v in ${theme_list[@]}
+	do
+		for f in ${all[@]}
+		do
+			if [[ "$v" == "$f" ]];then
+				menu[$i]="$v";((i++))
+				A=( `pacman -Sp $v` )
+				menu[$i]="`ECHO_VER $A`";((i++))
+				menu[$i]="off"
+				for r in ${THEME_LIST[@]}
+				do
+					if [[ "$v" == "$r" ]];then
+						menu[$i]="on"
+						break
+					fi
+				done
+				((i++))
+				break
+			fi
+		done
+	done
+	Lc 3 ${#menu[@]}
+	THEME_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+#---------------------------------------------------------
+SET_LXDE(){
+	local list=( `pacman -Sgq lxde` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${LXDE_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	LXDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 
-DIALOG=${DIALOG=dialog}
-tempfile=`mktemp 2>/dev/null` ||  tempfile=/tmp/arch-install.$$
-$DIALOG  --clear   \
-        --yesno "Скопировать кеш пакетов в установленную систему?" 5 60
-case $? in
-    0)
-	CP_PKG
-    ;;
-    255)
-    UMOUNT_ALL
-    clear
-    exit
-    ;;
-esac
-
-UMOUNT_ALL
-
-$DIALOG --backtitle "Завершение"  --clear \
-        --yesno "Перезагрузить систему?" 5 40
-
-case $? in
-    0)
-	reboot
-	;;
-    1)
-	clear
-	exit
-	;;
-    255)
-	clear
-	exit
-	;;
-esac
+SET_XFCE4(){
+	local list=( `pacman -Sgq xfce4 xfce4-goodies` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${XFCE4_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	XFCE4_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title " Пыщ пыщ " --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_GNOME(){
+	local list=( `pacman -Sgq gnome` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${GNOME_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	GNOME_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_DEEPIN(){
+	local list=( `pacman -Sgq deepin deepin-extra` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${DEEPIN_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	DEEPIN_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_KDE(){
+	local list=( `pacman -Sgq plasma kde-applications` ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${KDE_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	KDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_LXQT(){
+	local list=( `pacman -Sgq lxqt` xdg-utils xautolock ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${LXQT_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	LXQT_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_MATE(){
+	local list=( `pacman -Sgq mate mate-extra` mate-applet-dock mate-applet-streamer ) menu i=0 A
+	A=( `pacman -Sp ${list[@]}` )
+	for ((I=0; I < "${#list[@]}"; I++))
+	do
+		menu[$i]="${list[$I]}";((i++))
+		menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+		menu[$i]="off"
+		for f in ${MATE_LIST[@]}
+		do
+			if [[ "$f" == "${list[$I]}" ]];then
+				menu[$i]="on";
+				break
+			fi
+		done
+		((i++))
+	done
+	Lc 3 ${#menu[@]}
+	MATE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_VIDEO(){
+	local menu i=0 I=0 A=( `pacman -Sp ${video_list[@]}` )
+	for v in ${video_list[@]}
+	do
+		((I++))
+		for f in ${all[@]}
+		do
+			if [[ "$v" == "$f" ]];then
+				menu[$i]="$v";((i++))
+				menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+				menu[$i]="off"
+				for r in ${VIDEO_LIST[@]}
+				do
+					if [[ "$v" == "$r" ]];then
+						menu[$i]="on"
+						break
+					fi
+				done
+				((i++))
+				break
+			fi
+		done
+	done
+	Lc 3 ${#menu[@]}
+	VIDEO_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_AUDIO(){
+	local menu i=0 I=0 A=( `pacman -Sp ${audio_list[@]}` )
+	for v in ${audio_list[@]}
+	do
+		((I++))
+		for f in ${all[@]}
+		do
+			if [[ "$v" == "$f" ]];then
+				menu[$i]="$v";((i++))
+				menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+				menu[$i]="off"
+				for r in ${AUDIO_LIST[@]}
+				do
+					if [[ "$v" == "$r" ]];then
+						menu[$i]="on"
+						break
+					fi
+				done
+				((i++))
+				break
+			fi
+		done
+	done
+	Lc 3 ${#menu[@]}
+	AUDIO_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+SET_HVA()
+{
+	local menu i=0 I=0 A=( `pacman -Sp ${audio_list[@]}` )
+	for v in ${audio_list[@]}
+	do
+		((I++))
+		for f in ${all[@]}
+		do
+			if [[ "$v" == "$f" ]];then
+				menu[$i]="$v";((i++))
+				menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
+				menu[$i]="off"
+				for r in ${AUDIO_LIST[@]}
+				do
+					if [[ "$v" == "$r" ]];then
+						menu[$i]="on"
+						break
+					fi
+				done
+				((i++))
+				break
+			fi
+		done
+	done
+	Lc 3 ${#menu[@]}
+	AUDIO_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+#---------------------------------------------------------
