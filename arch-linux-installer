@@ -1,5 +1,4 @@
 #! /bin/bash
-setfont UniCyr_8x16 2>/dev/null
 EXIT()
 {
 	if [[ $1 != 0 ]]
@@ -16,6 +15,9 @@ EXITmenu()
 		;;
 		1)
 			return 1
+		;;
+		255)
+			return 255
 		;;
 		*)
 			echo "ERROR $1"
@@ -45,7 +47,48 @@ Lc(){
 		L=1
 	fi
 }
+MENU_FILEs(){
+	local menu i=0
+	for f in "$1"/*
+	do
+		if [ -f "$f" ]; then
+			f="${f##*/}"
+			menu[$i]="$f";((i++))
+			menu[$i]="";((i++))
+		fi
+	done
+	L 3 "${#menu[@]}"
+	$INTERFACE --backtitle "$BACKTITLE" --title "$2" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3;EXITmenu $?
+}
+MENU_DIRs(){
+	local menu i=0
+	for f in "$1"/*
+	do
+		if [ -d "$f" ]; then
+			if [[ "$f" != *'/posix'* && "$f" != *'/right'* && "$f" != "$3" ]];then
+				f="${f##*/}"
+				menu[$i]="$f";((i++))
+				menu[$i]="";((i++))
+			fi
+		fi
+	done
+	L 3 "${#menu[@]}"
+	$INTERFACE --backtitle "$BACKTITLE" --title "$2" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3;EXITmenu $?
+}
 #---------------------------------------------------------
+ZONE(){
+	zone=`MENU_DIRs /usr/share/zoneinfo " $time " "/usr/share/zoneinfo"`
+	if [[ "$?" == "1" ]];then
+		return 1
+	fi
+	SUBZONE
+}
+SUBZONE(){
+	subzone=`MENU_FILEs /usr/share/zoneinfo/"$zone" " $time "`
+	if [[ "$?" == "1" ]];then
+		ZONE
+	fi
+}
 LOCALE()
 {
 	local i=0 l=( `ls /usr/share/i18n/locales` ) H
@@ -93,17 +136,6 @@ LOCALE()
 	done
 	L 2 "${#locale[@]}"
 	locale=$($INTERFACE --backtitle "$BACKTITLE" --title " Локали " --menu "Выбор основной локали" 0 0 $L "${locale[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
-	rm -f /etc/locale.gen /etc/locale.conf /etc/vconsole.conf
-	for ((X=0; X < "${#locales[@]}"; X++))
-	do
-		echo "${locales[$X]}.UTF-8 UTF-8" >> /etc/locale.gen; EXIT $?
-	done
-	$INTERFACE --prgbox "locale-gen" "locale-gen" -1 -1; EXIT $?
-	echo "LANG=$locale.UTF-8" >> /etc/locale.conf
-	if [[ "$locale" == *ru* || "$locale" == *RU* ]];then
-		echo 'FONT="cyr-sun16"
-CONSOLEFONT="cyr-sun16"' >> /etc/vconsole.conf; EXIT $?
-	fi
 }
 #---------------------------------------------------------
 [ALLBLK]()
@@ -112,7 +144,7 @@ CONSOLEFONT="cyr-sun16"' >> /etc/vconsole.conf; EXIT $?
 }
 BLK(){
 	local i=$1
-	for f in $(find /dev -maxdepth 1 -name "md*" -type b -printf "%f\n" | sort -V)
+	for f in $(find /dev -maxdepth 1 -name "md*" -not -name "md*p*" -type b -printf "%f\n" | sort -V)
 	do
 		menu[i]="$f";((i++))
 		menu[i]="`lsblk /dev/$f -n -o TYPE`";((i++))
@@ -124,8 +156,26 @@ BLK(){
 	done
 	for f in $(find /dev -maxdepth 1 -name "mmcblk*" -not -name "mmcblk*p*" -type b -printf "%f\n" | sort -V)
 	do
+			menu[i]="$f";((i++))
+			menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "sd*" -not -name "sd*[0-9]" -type b -printf "%f\n" | sort -V)
+	do
 		menu[i]="$f";((i++))
 		menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+}
+BLKb(){
+	local i=$1
+	for f in $(find /dev -maxdepth 1 -name "nvme*n*" -not -name "nvme*n*p*" -type b -printf "%f\n" | sort -V)
+	do
+		menu[i]="$f";((i++))
+		menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
+	done
+	for f in $(find /dev -maxdepth 1 -name "mmcblk*" -not -name "mmcblk*p*" -type b -printf "%f\n" | sort -V)
+	do
+			menu[i]="$f";((i++))
+			menu[i]="`lsblk /dev/$f -n -o MODEL`";((i++))
 	done
 	for f in $(find /dev -maxdepth 1 -name "sd*" -not -name "sd*[0-9]" -type b -printf "%f\n" | sort -V)
 	do
@@ -156,12 +206,47 @@ BLKn(){
 		menu[i]="`lsblk /dev/$f -n -o FSTYPE,SIZE | head -n1`";((i++))
 	done
 }
+BLKf(){
+	local i=$1 T
+	for f in $(find /dev -maxdepth 1 -name "md*p*" -type b -printf "%f\n" | sort -V)
+	do
+		T="`lsblk /dev/$f -n -o FSTYPE,SIZE`"
+		if [[ "$T" == *"$2"* ]];then
+			menu[i]="$f";((i++))
+			menu[i]="$T";((i++))
+		fi
+	done
+	for f in $(find /dev -maxdepth 1 -name "nvme*n*p*" -type b -printf "%f\n" | sort -V)
+	do
+		T="`lsblk /dev/$f -n -o FSTYPE,SIZE`"
+		if [[ "$T" == *"$2"* ]];then
+			menu[i]="$f";((i++))
+			menu[i]="$T";((i++))
+		fi
+	done
+	for f in $(find /dev -maxdepth 1 -name "mmcblk*p*" -type b -printf "%f\n" | sort -V)
+	do
+		T="`lsblk /dev/$f -n -o FSTYPE,SIZE`"
+		if [[ "$T" == *"$2"* ]];then
+			menu[i]="$f";((i++))
+			menu[i]="$T";((i++))
+		fi
+	done
+	for f in $(find /dev -maxdepth 1 -name "sd*[0-9]" -type b -printf "%f\n" | sort -V)
+	do
+		T="`lsblk /dev/$f -n -o FSTYPE,SIZE`"
+		if [[ "$T" == *"$2"* ]];then
+			menu[i]="$f";((i++))
+			menu[i]="$T";((i++))
+		fi
+	done
+}
 PARTED()
 {
+	local menu
 	BLK 2
 	L 2 ${#menu[@]}
-	local M
-	M=$($INTERFACE --backtitle "$BACKTITLE" --title " Редактор разделов " --menu "`lsblk -D -M -f -n -o NAME,SIZE,MODEL,FSTYPE,FSUSE%,MOUNTPOINT`" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3)
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title " Редактор разделов " --menu "`lsblk -D -M -f -n -o NAME,SIZE,MODEL,FSTYPE,FSUSE%,MOUNTPOINT | grep -v zram`" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3)
 	case $? in
 		255)
 			menu[0]="[ALLBLK]"
@@ -177,12 +262,12 @@ PARTED()
 				fi
 			fi
 		;;
-		*)
-			return 1
-		;;
 		0)
 			cfdisk /dev/"$M"; EXIT $?
 			PARTED
+		;;
+		*)
+			return 1
 		;;
 	esac
 }
@@ -193,9 +278,20 @@ SET_MOUNT_POINT(){
 		MOUNT_POINT[$X]="$M"
 	fi
 }
+SET_OPTIONS_DISCARD(){
+	if [[ "`lsblk /dev/"${PARTITION[$X]}" -n --discard -o DISC-GRAN | head -n1`" != *"0B"* ]];then
+		if [[ "${FILESYSTEM[$X]}" == "ext4" || "${FILESYSTEM[$X]}" == "ext2" || "${FILESYSTEM[$X]}" == "vfat" || "${FILESYSTEM[$X]}" == "btrfs" || "${FILESYSTEM[$X]}" == "jfs" || "${FILESYSTEM[$X]}" == "xfs" || "${FILESYSTEM[$X]}" == "f2fs" || "${FILESYSTEM[$X]}" == "swap" ]];then
+			OPTIONS[$X]="$FS_OPTIONS,discard"
+		else
+			OPTIONS[$X]="$FS_OPTIONS"
+		fi
+	else
+		OPTIONS[$X]="$FS_OPTIONS"
+	fi
+}
 SET_PARTITION(){
-	BLKn 2
-	L 2 ${#menu[@]}
+	BLKn 6
+	L 1 ${#menu[@]}
 	menu[0]="$fstab_editor_overview"
 	menu[1]=""
 	menu[2]="$fstab_editor_setdir"
@@ -230,22 +326,14 @@ SET_PARTITION(){
 			*)
 				PARTITION[$X]="$M"
 				FILESYSTEM[$X]="`lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1`"
-				if [[ "`lsblk /dev/"${PARTITION[$X]}" -n --discard -o DISC-GRAN | head -n1`" != *"0B"* ]];then
-					if [[ "${FILESYSTEM[$X]}" == "ext4" || "${FILESYSTEM[$X]}" == "ext2" || "${FILESYSTEM[$X]}" == "vfat" || "${FILESYSTEM[$X]}" == "btrfs" || "${FILESYSTEM[$X]}" == "jfs" || "${FILESYSTEM[$X]}" == "xfs" || "${FILESYSTEM[$X]}" == "f2fs" ]];then
-						OPTIONS[$X]="$FS_OPTIONS,discard"
-					else
-						OPTIONS[$X]="$FS_OPTIONS"
-					fi
-				else
-					OPTIONS[$X]="$FS_OPTIONS"
-				fi
+				SET_OPTIONS_DISCARD
 			;;
 		esac
 	fi
 }
 SET_FILESYSTEM(){
+	local menu i
 	if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
-		local menu i
 		if ! [ -eL /usr/bin/mkfs.ext4 ]];then
 			menu[i]="ext4";((i++))
 			menu[i]="";((i++))
@@ -271,7 +359,7 @@ SET_FILESYSTEM(){
 			menu[i]="";((i++))
 		fi
 		if ! [ -eL /usr/bin/mkfs.nilfs2 ];then
-			menu[i]="nilfs";((i++))
+			menu[i]="nilfs2";((i++))
 			menu[i]="";((i++))
 		fi
 		if ! [ -eL /usr/bin/mkfs.f2fs ];then
@@ -298,14 +386,20 @@ SET_FILESYSTEM(){
 			menu[i]="exfat";((i++))
 			menu[i]="";((i++))
 		fi
+		menu[i]="$swap";((i++))
+		menu[i]="";((i++))
 		L 3 ${#menu[@]}
 		M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
 		if [[ "$?" == "0" ]];then
 			if [[ `lsblk /dev/"${PARTITION[$X]}" -n -o FSTYPE | head -n1` != $M ]];then
 				FORMAT[$X]="1"
+				FILESYSTEM[$X]="$M"
 			fi
-			FILESYSTEM[$X]="$M"
+			if [[ "$M" == "$swap" ]];then
+				FILESYSTEM[$X]="swap"
+			fi
 		fi
+		SET_OPTIONS_DISCARD
 	fi
 }
 SET_FORMAT(){
@@ -385,7 +479,7 @@ SET_OPTIONS(){
 		menu[i]="$btrfs_compress";((i++))
 	fi
 	menu[i]="TRIM:";((i++))
-	if [[ "$discard" == 1 ]];then
+	if [[ $discard == *"1"* ]];then
 		menu[i]="$fstab_editor_on";
 	else
 		menu[i]="$fstab_editor_off";
@@ -457,26 +551,45 @@ FSTAB_EDITOR_ADD()
 	fi
 	FSTAB_menu[0]="$fstab_editor_partition"
 	FSTAB_menu[1]="${PARTITION[$X]}"
-	FSTAB_menu[2]="$fstab_editor_mount_point"
-	FSTAB_menu[3]="${MOUNT_POINT[$X]}"
-	if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
-		if [[ "${PARTITION[$X]}" != "tmpfs" ]];then
-			FSTAB_menu[4]="$fstab_editor_filesystem"
-			FSTAB_menu[5]="${FILESYSTEM[$X]}"
-			FSTAB_menu[6]="$fstab_editor_filesystem_format"
-			FSTAB_menu[7]="${!fstab_editor_}"
+	if [[ "${FILESYSTEM[$X]}" != "swap" ]];then
+		FSTAB_menu[2]="$fstab_editor_mount_point"
+		FSTAB_menu[3]="${MOUNT_POINT[$X]}"
+		if [[ "${FILESYSTEM[$X]}" != "bind" ]];then
+			if [[ "${PARTITION[$X]}" != "tmpfs" ]];then
+				FSTAB_menu[4]="$fstab_editor_filesystem"
+				FSTAB_menu[5]="${FILESYSTEM[$X]}"
+				FSTAB_menu[6]="$fstab_editor_filesystem_format"
+				FSTAB_menu[7]="${!fstab_editor_}"
+			fi
+			FSTAB_menu[8]="$fstab_editor_options"
+			FSTAB_menu[9]="${OPTIONS[$X]}"
+			FSTAB_menu[10]="$fstab_editor_dump"
+			FSTAB_menu[11]="${DUMP[$X]}"
+			FSTAB_menu[12]="$fstab_editor_pass"
+			FSTAB_menu[13]="${PASS[$X]}"
 		fi
-		FSTAB_menu[8]="$fstab_editor_options"
-		FSTAB_menu[9]="${OPTIONS[$X]}"
-		FSTAB_menu[10]="$fstab_editor_dump"
-		FSTAB_menu[11]="${DUMP[$X]}"
+		if [[ ${MOUNT_POINT[$X]} == "" ]];then
+			((B++))
+		fi
+	else
+		MOUNT_POINT[$X]="none"
+		FSTAB_menu[4]="$fstab_editor_filesystem"
+		FSTAB_menu[5]="${FILESYSTEM[$X]}"
+		FSTAB_menu[6]="$fstab_editor_filesystem_format"
+		FSTAB_menu[7]="${!fstab_editor_}"
+		FSTAB_menu[8]="TRIM:";((i++))
+		if [[ "${OPTIONS[$X]}" == *discard* ]];then
+			FSTAB_menu[9]="$fstab_editor_on";
+		else          
+			FSTAB_menu[9]="$fstab_editor_off";
+		fi
+#		FSTAB_menu[10]="$fstab_editor_dump"
+#		FSTAB_menu[11]="${DUMP[$X]}"
 		FSTAB_menu[12]="$fstab_editor_pass"
 		FSTAB_menu[13]="${PASS[$X]}"
 	fi
+	
 	if [[ ${FILESYSTEM[$X]} == "" ]];then
-		((B++))
-	fi
-	if [[ ${MOUNT_POINT[$X]} == "" ]];then
 		((B++))
 	fi
 	if [[ ${PARTITION[$X]} == "" ]];then
@@ -556,7 +669,7 @@ FSTAB_EDITOR_ADD()
 							;;
 						esac
 					fi
-					if [[ ${OPTIONS[$X]} == *"discard"* ]];then
+					if [[ ${OPTIONS[$X]} == *discard* ]];then
 						discard='1'
 					else
 						discard='0'
@@ -575,6 +688,14 @@ FSTAB_EDITOR_ADD()
 				"$fstab_editor_complete")
 					X=0
 				;;
+				"TRIM:")
+					if [[ "${OPTIONS[$X]}" == *discard* ]];then
+						OPTIONS[$X]="defaults"
+					else
+						OPTIONS[$X]="defaults,discard"
+					fi
+					FSTAB_EDITOR_ADD
+				;;
 			esac
 		;;
 		1)
@@ -592,7 +713,7 @@ FSTAB_EDITOR_ADD()
 }
 FSTAB_EDITOR(){
 	local i=2 A=0 menu I L=0
-	menu[0]="A"
+	menu[0]=""
 	menu[1]="$fstab_editor_add"
 	for ((I=0; L < "${#PARTITION[@]}"; I++))
 	do
@@ -606,7 +727,7 @@ FSTAB_EDITOR(){
 	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$fstab_editor" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3); EXITmenu $?
 	if [[ "$?" == 0 ]];then
 		case $M in
-			"A")
+			"")
 				for ((x=0;; x++));do
 					if [[ "${PARTITION[$x]}" == "" ]];then
 						X="$x"
@@ -620,7 +741,7 @@ FSTAB_EDITOR(){
 					FILESYSTEM[0]="ext4"
 					PASS[0]="1"
 				else
-					PASS[$X]="2"
+					PASS[$X]="1"
 				fi
 				FSTAB_EDITOR_ADD
 			;;
@@ -700,9 +821,13 @@ PKG_GPU_AUTO(){
 			break
 		fi
 	done
-	if [[ "${GPU[@]}" == *"$intel"* ]];then
-		XF86_VIDEO_LIST[$i]='xf86-video-intel';((i++))
-	fi
+	for f in "${intel_media_driver[@]}" "${libva_intel_driver[@]}"
+	do
+		if [[ "${GPU[@]}" == *"$f"* ]];then
+			XF86_VIDEO_LIST[$i]='xf86-video-intel';((i++))
+			break
+		fi
+	done
 	if [[ "${GPU[@]}" == *"QXL"* ]];then
 		XF86_VIDEO_LIST[$i]='xf86-video-qxl';((i++))
 	fi
@@ -1008,7 +1133,7 @@ SET_LXDE(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	LXDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	LXDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 
 SET_XFCE4(){
@@ -1029,7 +1154,7 @@ SET_XFCE4(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	XFCE4_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title " Пыщ пыщ " --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	XFCE4_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 SET_GNOME(){
 	local list=( `pacman -Sgq gnome` ) menu i=0 A
@@ -1049,7 +1174,7 @@ SET_GNOME(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	GNOME_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	GNOME_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 SET_DEEPIN(){
 	local list=( `pacman -Sgq deepin deepin-extra` ) menu i=0 A
@@ -1069,7 +1194,7 @@ SET_DEEPIN(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	DEEPIN_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	DEEPIN_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 SET_KDE(){
 	local list=( `pacman -Sgq plasma kde-applications` ) menu i=0 A
@@ -1089,7 +1214,7 @@ SET_KDE(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	KDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	KDE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 SET_LXQT(){
 	local list=( `pacman -Sgq lxqt` xdg-utils xautolock ) menu i=0 A
@@ -1109,7 +1234,7 @@ SET_LXQT(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	LXQT_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	LXQT_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
 SET_MATE(){
 	local list=( `pacman -Sgq mate mate-extra` mate-applet-dock mate-applet-streamer ) menu i=0 A
@@ -1129,8 +1254,56 @@ SET_MATE(){
 		((i++))
 	done
 	Lc 3 ${#menu[@]}
-	MATE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	MATE_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
 }
+SET_DE(){
+	local menu=(	"LXDE"		""
+			"XFCE"		""
+			"MATE"		""
+			"KDE"		""
+			"Deepin"	""
+			"LXQT"		""
+			"Gnome"		"")
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --menu "" 0 0 4 "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+	case $M in
+		"LXDE")
+			SET_LXDE
+			DE=( ${LXDE_LIST[@]} )
+			MAIN
+		;;
+		"XFCE")
+			SET_XFCE4
+			DE=( ${SET_XFCE4[@]} )
+			MAIN
+		;;
+		"MATE")
+			SET_MATE
+			DE=( ${MATE_LIST[@]} )
+			MAIN
+		;;
+		"KDE")
+			SET_KDE
+			DE=( ${KDE_LIST[@]} )
+			MAIN
+		;;
+		"Deepin")
+			SET_DEEPIN
+			DE=( ${DEEPIN_LIST[@]} )
+			MAIN
+		;;
+		"LXQT")
+			SET_LXQT
+			DE=( ${LXQT_LIST[@]} )
+			MAIN
+		;;
+		"Gnome")
+			SET_GNOME
+			DE=( ${GNOME_LIST[@]} )
+			MAIN
+		;;
+	esac
+}
+#---------------------------------------------------------
 SET_VIDEO(){
 	local menu i=0 I=0 A=( `pacman -Sp ${video_list[@]}` )
 	for v in ${video_list[@]}
@@ -1185,8 +1358,8 @@ SET_AUDIO(){
 }
 SET_HVA()
 {
-	local menu i=0 I=0 A=( `pacman -Sp ${audio_list[@]}` )
-	for v in ${audio_list[@]}
+	local menu i=0 I=0 A=( `pacman -Sp ${hva_list[@]}` )
+	for v in ${hva_list[@]}
 	do
 		((I++))
 		for f in ${all[@]}
@@ -1195,7 +1368,7 @@ SET_HVA()
 				menu[$i]="$v";((i++))
 				menu[$i]="`ECHO_VER ${A[$I]}`";((i++))
 				menu[$i]="off"
-				for r in ${AUDIO_LIST[@]}
+				for r in ${HVA_LIST[@]}
 				do
 					if [[ "$v" == "$r" ]];then
 						menu[$i]="on"
@@ -1208,6 +1381,428 @@ SET_HVA()
 		done
 	done
 	Lc 3 ${#menu[@]}
-	AUDIO_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+	HVA_LIST=( `$INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list" --clear --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3` ); EXITmenu $?
+}
+EFI_CHECK(){
+	if [ -x /usr/bin/efibootmgr ]
+	then
+		if [[ *"not supported"* == "`efibootmgr -v`" ]];then
+			EFI=1
+		else
+			EFI=0
+		fi
+	else
+		EFI=0
+	fi
+}
+BOOTLOADER(){
+	local menu
+	if [[ "$EFI" == "0" ]];then
+		BLKb 0
+		L 3 ${#menu[@]}
+		M=$($INTERFACE --backtitle "$BACKTITLE" --title " $main_bootloader " --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+		if [[ "gpt" == "`lsblk /dev/$M -D -f -n -o PTTYPE | head -n 1`" ]];then
+			if [[ '' != "`fdisk /dev/$M -l | grep 'BIOS boot'`" ]];then
+				BOOT="$M"
+			else
+				$INTERFACE --title "$BACKTITLE" --msgbox "$err_no_bios_boot" 0 0
+				return 10
+			fi
+		fi
+	else
+		BLKf 0 fat
+		if [[ '0' != "${#menu[@]}" ]];then
+			L 3 ${#menu[@]}
+			M=$($INTERFACE --backtitle "$BACKTITLE" --title "$main_bootloader" --menu "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+			if [[ *"gpt"* == "`lsblk /dev/$M -D -f -n -o PTTYPE | head -n 1`" ]];then
+				if [[ '' != "`fdisk /dev/$M -l | grep 'BIOS boot'`" ]];then
+					BOOT="$M"
+				else
+					$INTERFACE --title "$BACKTITLE" --msgbox "$err_no_bios_boot" 0 0
+					return 10
+				fi
+			fi
+		else
+			$INTERFACE --msgbox "$err_no_fat" 0 0
+		fi
+	fi
+}
+SET_PKG(){
+	local menu=(			"$kernel"	""
+					"$graphics"	""
+					"$de"		""
+					"$theme"	""
+					"$theme_icon"	""
+					"$theme_cursor"	""
+					"$video"	""
+					"$audio"	""
+					"$fonts"	"")
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$set_pkg" --menu "" 0 0 6 "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+	case $M in
+		"$kernel")
+			SET_KERNEL
+			MAIN
+		;;
+		"$graphics")
+			SET_GPU
+			SET_HVA
+			MAIN
+		;;
+		"$theme")
+			SET_THEME
+			MAIN
+		;;
+		"$theme_icon")
+			SET_ICON
+			MAIN
+		;;
+		"$theme_cursor")
+			SET_XCURSOR
+			MAIN
+		;;
+		"$de")
+			SET_DE
+			MAIN
+		;;
+		"$video")
+			SET_VIDEO
+			MAIN
+		;;
+		"$audio")
+			SET_AUDIO
+			MAIN
+		;;
+		"$fonts")
+			SET_FONTS
+			MAIN
+		;;
+	esac
 }
 #---------------------------------------------------------
+MAIN(){
+	local menu=(	"$main_localization"	""
+			"$main_time"	""
+			"$main_pkg"	""
+			"$main_parted"	""
+			"$main_fatab"	""
+			"$main_bootloader"	""
+			"$main_install"	"")
+	M=$($INTERFACE --backtitle "$BACKTITLE" --title "$main_title" --menu "" 0 0 4 "${menu[@]}" 3>&1 1>&2 2>&3);EXITmenu $?
+	case $M in
+		"$main_localization")
+			LOCALE
+			MAIN
+		;;
+		"$main_time")
+			ZONE
+			MAIN
+		;;
+		"$main_pkg")
+			SET_PKG
+			MAIN
+		;;
+		"$main_parted")
+			PARTED
+			MAIN
+		;;
+		"$main_fatab")
+			FSTAB_EDITOR
+			MAIN
+		;;
+		"$main_bootloader")
+			BOOTLOADER
+			MAIN
+		;;
+		"$main_install")
+			INFO
+			if [[ "$?" == "0" ]];then
+				DOWLAND "$CACHE"
+				if [[ "$?" == "0" ]];then
+					FORMAT
+					INSTALL
+					SYSTEMD
+					USERADD
+					UMOUNT "$TEMP"
+					rm -r "$TEMP"
+				else
+					MAIN
+				fi
+			else
+				MAIN
+			fi
+		;;
+	esac
+}
+INFO(){
+	local fstab #PARTITION MOUNT_POINT FILESYSTEM FORMAT OPTIONS DUMP PASS
+for ((X=0; X < "${#PARTITION[@]}"; X++));do
+	if [[ "${FORMAT[$X]}" == "1" ]];then
+		f="$part_format"
+	else
+		unset f
+	fi
+	fstab="$fstab
+${PARTITION[$X]} ${MOUNT_POINT[$X]} ${FILESYSTEM[$X]} ${OPTIONS[$X]} ${DUMP[$X]} ${PASS[$X]} $f"
+done
+	local text="$localization $LOCALE / ${LOCALES[@]}
+$time: $zone / $subzone
+$kernel: $KERNEL
+$graphics: ${XF86_VIDEO_LIST[@]} ${HVA_LIST[@]}
+$de: ${DE[@]}
+$theme: ${THEME_LIST[@]}
+$theme_icon: ${ICON_LIST[@]}
+$theme_cursor: ${XCURSOR_LIST[@]}
+$multimedia: ${VIDEO_LIST[@]} ${AUDIO_LIST[@]}
+$fonts: ${FONT_LIST[@]}
+
+$main_bootloader: $BOOT
+$part_install$fstab
+
+$install_continuation"
+	"$INTERFACE" --no-shadow --backtitle "$BACKTITLE" --yesno "$text" -1 -1
+	return $?
+}
+SET_GROUPS(){
+	local menu i=0 g=( `cat "$TEMP"/ROOT/etc/group` )
+	for ((I=0; I < "${#groups[@]}"; I++))
+	do
+		for k in ${g[@]};do
+			if [[ "$k" == *"${groups[$I]}"* ]];then
+				menu[$i]="${groups[$I]}";((i++))
+				menu[$i]="";((i++))
+				menu[$i]="off"
+				for f in ${GROUPs[@]};do
+					if [[ "$f" == "${groups[$I]}" ]];then
+						menu[$i]="on";
+						break
+					fi
+				done
+				((i++))
+				break
+			fi
+		done
+	done
+	Lc 3 ${#menu[@]}
+	GROUPs=$($INTERFACE --backtitle "$BACKTITLE" --title "$set_video_list"  --checklist "" 0 0 $L "${menu[@]}" 3>&1 1>&2 2>&3)
+}
+ADD_(){
+	local t
+	for f in $@;do
+		t="$f,"
+	done
+	echo -n ${f%\,*}
+}
+USERADD(){
+	local M
+	M=(`$INTERFACE  --backtitle "$BACKTITLE" --title " $useradd " --no-cancel --column-separator \' --separator \'\  --insecure --mixedform "" 6 0 0 \
+	"$useradd_user"		1 1	"" 1 20  40 0 0 \
+	"$useradd_pass"		2 1	"" 2 20  40 0 1 \
+	"$useradd_repetition"	3 1	"" 3 20  40 0 1 \
+	"$useradd_pass_root"	4 1	"" 4 20  40 0 1 \
+	"$useradd_repetition"	5 1	"" 5 20  40 0 1 \
+	"$useradd_home_dir"	6 1	"/home" 6 20 40 0 0 \
+	"UID"			7 1	"1000" 7 20  40 0 0 \
+	3>&1 1>&2 2>&3`)
+	for ((X=0; X < "${#M[@]}"; X++));do
+		M[$X]=${M[$X]%\'*}
+	done
+	if [[ "${M[0]}" == '' ]];then
+		$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_user_err" 5 40
+		ERR=1
+	fi
+	if [[ "${M[1]}" == '' ]];then
+		$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_pass_err_0" 5 40
+		ERR=1
+	else
+		if [[ "${M[1]}" != "${M[2]}" ]];then
+			$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_pass_err" 5 40
+			ERR=1
+		fi
+	fi
+	if [[ "${M[3]}" == "" ]];then
+		$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_pass_root_err_0" 5 40
+		ERR=1
+	else
+		if [[ "${M[3]}" != "${M[4]}" ]];then
+			$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_pass_root_err" 5 40
+			ERR=1
+		fi
+	fi
+	if [[ "${M[5]}" == "" ]];then
+		$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_home_dir_err" 5 40
+		ERR=1
+	fi
+	if [[ "${M[6]}" == "" ]];then
+		$INTERFACE --no-shadow --backtitle "$BACKTITLE" --msgbox "$useradd_uid_err" 5 40
+		ERR=1
+	fi
+	if [[ "$ERR" == "1" ]];then
+		unset ERR;USERADD
+	else
+		SET_GROUPS
+		chroot "$TEMP"/ROOT useradd -m -G `ADD_ ${GROUPs[@]}` -d "${M[5]}/${M[0]}" -u "${M[6]}" -p "`openssl passwd -1 "${M[1]}"`" -s /bin/bash "${M[0]}"
+		chroot "$TEMP"/ROOT usermod -p `openssl passwd -1 "${M[3]}"` root
+		unset M[1] M[3]
+	fi
+}
+FORMAT(){
+	for ((X=0; X < "${#PARTITION[@]}"; X++));do
+	if [[ "${FORMAT[$X]}" == "1" ]];then
+		echo "$format ${PARTITION[$X]} $to ${FILESYSTEM[$X]}"
+		case ${FILESYSTEM[$X]} in
+			ext*)
+				mkfs.${FILESYSTEM[$X]} -E lazy_itable_init=0,lazy_journal_init=0 -F /dev/"${PARTITION[$X]}"; EXIT $?
+			;;
+			hfs)
+				mkfs.${FILESYSTEM[$X]}plus /dev/"${PARTITION[$X]}"; EXIT $?
+			;;
+			swap)
+				mkswap -f /dev/"${PARTITION[$X]}"; EXIT $?
+			;;
+			*)
+				mkfs.${FILESYSTEM[$X]} /dev/"${PARTITION[$X]}"; EXIT $?
+			;;
+		esac
+	fi
+	done
+	mkdir -p "$TEMP"; EXIT $?
+	for ((X=0; X < "${#PARTITION[@]}"; X++));do
+		if [[ "${FILESYSTEM[$X]}" != "swap" ]];then
+			if ! [ -d "$TEMP"/ROOT/"${MOUNT_POINT[$X]}" ]; then
+				mkdir -p "$TEMP"/ROOT/"${MOUNT_POINT[$X]}"; EXIT $?
+			fi
+			echo "$mount "${PARTITION[$X]}" $to "${MOUNT_POINT[$X]}""
+			mount /dev/"${PARTITION[$X]}" "$TEMP"/ROOT/"${MOUNT_POINT[$X]}" -t ${FILESYSTEM[$X]} -o ${OPTIONS[$X]}
+		fi
+	done
+}
+CHROOT_SETUP() {
+	mkdir -m 0777 -p "$1"/var/log "$1"/{dev,run}
+	mkdir -m 1777 -p "$1"/tmp
+	mkdir -m 0555 -p "$1"/{sys,proc}
+	mount proc "$1/proc" -t proc -o nosuid,noexec,nodev
+	mount sys "$1/sys" -t sysfs -o nosuid,noexec,nodev,ro
+	if [ -d /sys/firmware/efi/efivars ]
+	then
+		mkdir -p "$1/sys/firmware/efi/efivars"
+		mount /sys/firmware/efi/efivars "$1/sys/firmware/efi/efivars" -t efivarfs -o nosuid,noexec,nodev
+	fi
+	mount udev "$1/dev" -t devtmpfs -o mode=0777,nosuid
+	mount devpts "$1/dev/pts" -t devpts -o mode=0620,gid=5,nosuid,noexec
+	mount shm "$1/dev/shm" -t tmpfs -o mode=1777,nosuid,nodev
+	mount /run "$1/run" --bind
+	mount tmp "$1/tmp" -t tmpfs -o mode=1777,strictatime,nodev,nosuid
+}
+UMOUNT(){
+	if [[ "" != `mount | grep "$1"` ]];then
+		umount -q -l -f `mount | awk '{print $3}' | grep "$1" | sort -rn`
+	fi
+}
+DOWLAND(){
+	if [[ `ping archlinux.org -c 1` ]] ;then
+		mkdir -p "$TEMP"/PACMAN/var/cache/pacman/pkg
+		mkdir -p "$TEMP"/PACMAN/var/lib/pacman/sync
+		mount --bind /var/cache/pacman/pkg "$TEMP"/PACMAN/var/cache/pacman/pkg
+		mount --bind /var/lib/pacman/sync "$TEMP"/PACMAN/var/lib/pacman/sync
+		pacman -r "$TEMP"/PACMAN -Sy
+		local dowland=(`pacman -r "$TEMP"/PACMAN -Sp base grub $KERNEL ${XF86_VIDEO_LIST[@]} ${HVA_LIST[@]} ${DE[@]} ${THEME_LIST[@]} ${ICON_LIST[@]} ${XCURSOR_LIST[@]} ${VIDEO_LIST[@]} ${AUDIO_LIST[@]} ${FONT_LIST[@]} | grep -v 'file:'`)
+	else
+		local dowland=(`pacman -r "$TEMP"/PACMAN -Sp base grub $KERNEL ${XF86_VIDEO_LIST[@]} ${HVA_LIST[@]} ${DE[@]} ${THEME_LIST[@]} ${ICON_LIST[@]} ${XCURSOR_LIST[@]} ${VIDEO_LIST[@]} ${AUDIO_LIST[@]} ${FONT_LIST[@]} | grep -v 'file:'`)
+		if [[ ${#dowland[@]} == 0 ]];then
+			$INTERFACE --backtitle "$BACKTITLE" --yesno "$install_dowland_i_ok" -1 -1
+			if [[ $? != 0 ]];then
+				return 7
+			fi
+		else
+			$INTERFACE --title "$BACKTITLE" --msgbox " $install_dowland_i " 0 0
+			return 7
+		fi
+	fi
+	local x L=0 r=0 PCT=0 n 
+	umount "$TEMP"/PACMAN/var/cache/pacman/pkg "$TEMP"/PACMAN/var/lib/pacman/sync; rm -r "$TEMP"/PACMAN
+	if [[ ${#dowland[@]} == 0 ]];then
+		return 0
+	fi
+	for l in "${dowland[@]}";do
+		if [[ ${#L} < ${#l} ]];then
+			L=${#l}
+		fi
+	done
+	L=$(( $L + 10 ))
+	local i=0 n=${#dowland[*]}
+	$INTERFACE --title " $install_dowland_s " --gauge "$f " 6 $L < <(
+	for ((X=0; X < "${#dowland[@]}";));do
+cat <<EOF
+XXX
+$PCT
+XXX
+EOF
+cat <<EOF
+XXX
+${dowland[$X]}
+XXX
+EOF
+
+		${DOWNLOADER[@]} "$1"/"${dowland[$X]##*/}" "${dowland[$X]}" 2> /dev/null
+		r=$?
+		if [[ $r == 0 ]];then
+			PCT=$(( 100*(++i)/n ))
+			((X++))
+		else
+cat <<EOF
+XXX
+${dowland[$X]##*/}:$install_dowland_r:$r
+XXX
+EOF
+		sleep 4
+		fi
+	   done
+	)
+}
+SYSTEMD(){
+	if [ -f "$TEMP"/ROOT/usr/lib/systemd/system/Networkanager.service ];then
+		chroot "$TEMP"/ROOT systemctl enable Networkanager
+	fi
+	if [ -f "$TEMP"/ROOT/usr/lib/systemd/system/lxdm.service ];then
+		chroot "$TEMP"/ROOT systemctl enable lxdm.service
+	fi
+	if [ -f "$TEMP"/ROOT/usr/lib/systemd/system/slim.service ];then
+		chroot "$TEMP"/ROOT systemctl enable slim.service
+	fi
+	if [ -f "$TEMP"/ROOT/usr/lib/systemd/system/ly.service ];then
+		chroot "$TEMP"/ROOT systemctl enable ly.service
+	fi
+}
+INSTALL(){
+	mkdir -p "$TEMP"/ROOT/var/cache/pacman/pkg
+	mkdir -p "$TEMP"/ROOT/var/lib/pacman/sync
+	CHROOT_SETUP "$TEMP"/ROOT
+	mount --bind /var/cache/pacman/pkg "$TEMP"/ROOT/var/cache/pacman/pkg
+	mount --bind /var/lib/pacman/sync "$TEMP"/ROOT/var/lib/pacman/sync
+	pacman -r "$TEMP"/ROOT -S base grub --needed --noconfirm
+	pacman -r "$TEMP"/ROOT -S $KERNEL ${XF86_VIDEO_LIST[@]} ${HVA_LIST[@]} ${DE[@]} ${THEME_LIST[@]} ${ICON_LIST[@]} ${XCURSOR_LIST[@]} ${VIDEO_LIST[@]} ${AUDIO_LIST[@]} ${FONT_LIST[@]} ${SYSTEM[@]} --needed --noconfirm
+	umount "$TEMP"/ROOT/var/cache/pacman/pkg "$TEMP"/ROOT/var/lib/pacman/sync
+	cp -v /var/lib/pacman/sync/* "$TEMP"/ROOT/var/lib/pacman/sync/
+	chroot "$TEMP"/ROOT pacman-key --init
+	chroot "$TEMP"/ROOT pacman-key --populate archlinux
+	rm -f "$TEMP"/ROOT/etc/locale.gen "$TEMP"/ROOT/etc/locale.conf "$TEMP"/ROOT/etc/vconsole.conf
+	for ((X=0; X < "${#LOCALES[@]}"; X++))
+	do
+		echo "${LOCALES[$X]}.UTF-8 UTF-8" >> "$TEMP"/ROOT/etc/locale.gen; EXIT $?
+	done
+	chroot "$TEMP"/ROOT locale-gen; EXIT $?
+	echo "LANG=$LOCALE.UTF-8" >> "$TEMP"/ROOT/etc/locale.conf
+	if [[ "$locale" == *ru* || "$locale" == *RU* ]];then
+		echo 'FONT="cyr-sun16"
+CONSOLEFONT="cyr-sun16"' >> "$TEMP"/ROOT/etc/vconsole.conf; EXIT $?
+	fi
+	for ((X=0; X < "${#PARTITION[@]}"; X++));do
+			echo "UUID=`lsblk /dev/"${PARTITION[$X]}" -n -o UUID`	${MOUNT_POINT[$X]}	${FILESYSTEM[$X]}	${OPTIONS[$X]}	${DUMP[$X]} ${PASS[$X]}" > "$TEMP"/ROOT/etc/fstab
+	done
+	if [[ "$EFI" == "1" ]];then
+		chroot "$TEMP"/ROOT grub-install --efi-directory="/boot/EFI" --bootloader-id="Arch Linux" --removable /boot/EFI
+	else
+		chroot "$TEMP"/ROOT grub-install /dev/$BOOT
+	fi
+	chroot "$TEMP"/ROOT grub-mkconfig -o /boot/grub/grub.cfg
+}
